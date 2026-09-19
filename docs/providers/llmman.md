@@ -76,9 +76,9 @@ Version scope: this page is verified against [llmman v0.1.334](https://github.co
 
     Bare names such as `qwen3.8` resolve to Docker Hub's curated `docker.io/ai/<name>:latest`. `owner/repo` names resolve to `hf.co/owner/repo`; a full reference (`ghcr.io/...`, `hf.co/...`) is used as-is.
 
-    `llmman serve` takes no arguments: it listens on `127.0.0.1:17434` and loads any pulled model on the first request that names it, then unloads it after five idle minutes. GPU acceleration (CUDA, ROCm, Vulkan, Metal) is auto-detected and the matching `llama-server` is downloaded if none is on `PATH`. Everything else is tuned through the daemon's environment: `LLMMAN_HOST` for the bind address, `LLMMAN_CONTEXT_LENGTH` for the server context, `LLMMAN_KEEP_ALIVE` for the idle unload timer (see [Advanced configuration](#advanced-configuration)).
+    `llmman serve` requires no arguments (an optional model argument preloads that model): it listens on `127.0.0.1:17434` and loads any pulled model on the first request that names it, then unloads it after five idle minutes. GPU acceleration (CUDA, ROCm, Vulkan, Metal) is auto-detected and the matching `llama-server` is downloaded if none is on `PATH`. Everything else is tuned through the daemon's environment: `LLMMAN_HOST` for the bind address, `LLMMAN_CONTEXT_LENGTH` for the server context, `LLMMAN_KEEP_ALIVE` for the idle unload timer (see [Advanced configuration](#advanced-configuration)).
 
-    By default llmman uses the model's trained context (262,144 for `qwen3.8`) and, on out-of-memory, retries with the context halved down to a 16,384 floor. `llmman ps` shows the context a loaded model actually got; keep the OpenClaw model's `contextWindow` at or below that value.
+    By default llmman uses up to 262,144 tokens, capped to the model's trained context (262,144 for `qwen3.8`) and, on out-of-memory, retries with the context halved down to a 16,384 floor. `llmman ps` shows the context a loaded model actually got; keep the OpenClaw model's `contextWindow` at or below that value.
 
   </Step>
   <Step title="Verify the server">
@@ -242,8 +242,9 @@ Which side serves a request:
 If a request llmman kept local is then refused by the local backend as larger
 than its context, llmman resends it to the hosted half before anything reaches
 OpenClaw. A `local` pin is never overridden this way. Every routed request is
-logged with the side and the reason; the response's `model` field still shows
-the pair name.
+logged with the side and the reason. The raw completion response may report
+the backend model or GGUF path; OpenClaw's result envelope retains the
+configured pair ref.
 
 ### Hosted-provider key
 
@@ -328,12 +329,17 @@ The hosted half authenticates like any llmman `--provider` request. Pick one:
 }
 ```
 
-The daemon's context length is the pair's local budget: 4 bytes per token of
-`LLMMAN_CONTEXT_LENGTH` (or the model's trained context when unset). Set
-`LLMMAN_CONTEXT_LENGTH=65536` in the daemon's environment to match the example,
-or set `LLMMAN_HYBRID_LOCAL_BYTES` to pick the byte budget directly.
+The daemon computes one hybrid byte budget at startup: 4 bytes per token of
+`LLMMAN_CONTEXT_LENGTH`, or `262144 × 4 = 1048576` bytes when unset. This budget
+does not follow a model's trained-context cap or a later out-of-memory
+reduction. Set `LLMMAN_CONTEXT_LENGTH=65536` in the daemon's environment to
+match the example, or set `LLMMAN_HYBRID_LOCAL_BYTES` to pick the byte budget
+directly. An explicit `LLMMAN_CONTEXT_LENGTH=0` disables size-based routing
+unless a positive `LLMMAN_HYBRID_LOCAL_BYTES` supplies a budget; setting the
+byte override to `0` also disables that rule. Local context-refusal fallback
+still applies unless the request is pinned local.
 
-Set `contextWindow` on the pair to the local budget. OpenClaw then compacts
+Set `contextWindow` on the pair to the local model's usable token context. OpenClaw then compacts
 around the local model's limit, so most turns stay local; llmman still
 overflows to `gpt-5.6-luna` when a request exceeds it. Set it to the hosted
 model's window instead if you prefer fewer compactions and more hosted
@@ -571,7 +577,7 @@ governs the underlying HTTP request for normal model calls.
   </Tab>
 
   <Tab title="On-demand startup">
-    OpenClaw starts llmman itself when a `llmman/...` model is selected and stops it when idle:
+    OpenClaw starts llmman on demand when a `llmman/...` model is requested. This example keeps the daemon running until OpenClaw exits (`idleStopMs: 0`). Set a positive `idleStopMs` to stop an OpenClaw-started daemon after that many idle milliseconds; this is separate from llmman unloading idle models:
 
     ```json5
     {
@@ -793,7 +799,7 @@ container, or service account.
 
     `LLMMAN_NUM_PARALLEL` scales `--ctx-size` up by that factor so each slot keeps the full context.
 
-    On the OpenClaw side, `contextWindow` declares the model's window and `contextTokens` caps active input. Keep `contextWindow` at or below the server value; OpenClaw derives compaction and preflight thresholds from it. For hybrid pairs the same value also sets the byte budget that decides when llmman overflows to the hosted half.
+    On the OpenClaw side, `contextWindow` declares the model's window and `contextTokens` caps active input. Keep `contextWindow` at or below the server value; OpenClaw derives compaction and preflight thresholds from it. OpenClaw's `contextWindow` does not change llmman's hybrid byte budget; configure the daemon separately as described in [Hybrid config](#hybrid-config).
 
     ```json5
     {
@@ -818,7 +824,7 @@ container, or service account.
   </Accordion>
 
   <Accordion title="Thinking control">
-    Qwen3.8 thinks by default; llmman returns the reasoning as `reasoning_content`, which OpenClaw's `openai-completions` adapter separates from the final text. Requests are proxied to `llama-server`, so `chat_template_kwargs` passes through. To turn thinking off for a model:
+    Qwen3.8 thinks by default; llmman returns the reasoning as `reasoning_content`, which OpenClaw's `openai-completions` adapter separates from the final text. Requests are proxied to `llama-server`, so `chat_template_kwargs` passes through. To turn thinking off for agent turns with a local Qwen model:
 
     ```json5
     {
@@ -836,7 +842,31 @@ container, or service account.
     }
     ```
 
-    `openclaw agent --model llmman/qwen3.8 --thinking off` and `/think off` work for one-shot control. `reasoning_effort` is forwarded unchanged; whether a level changes anything depends on the model's chat template.
+    For per-run or session control, declare the local Qwen model's thinking format:
+
+    ```json5
+    {
+      models: {
+        providers: {
+          llmman: {
+            models: [
+              {
+                id: "qwen3.8",
+                name: "Qwen3.8 (llmman)",
+                reasoning: true,
+                input: ["text", "image"],
+                compat: { thinkingFormat: "qwen-chat-template" },
+              },
+            ],
+          },
+        },
+      },
+    }
+    ```
+
+    With this declaration, `openclaw agent --model llmman/qwen3.8 --thinking off`, `/think off`, and `openclaw infer model run --local --model llmman/qwen3.8 --thinking off --prompt "Reply with exactly: pong" --json` map the thinking setting to `chat_template_kwargs.enable_thinking`. Without it, the generic proxy defaults do not send this control or `reasoning_effort`.
+
+    The lean `infer model run` path does not read the agent-level `params` recipe above; use the compatibility declaration and `--thinking off` for that probe. Do not combine a fixed `enable_thinking` agent param with per-run control, since the fixed param overrides the generated value. Apply Qwen-specific controls to a hybrid ref only if both its local and hosted backends accept them.
 
   </Accordion>
 
