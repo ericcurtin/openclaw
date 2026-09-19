@@ -134,7 +134,7 @@ llmman is a custom OpenAI-compatible `/v1` backend, so the same `localService` A
 }
 ```
 
-Replace `command` with the result of `which llmman` on the machine running OpenClaw, and set `LLMMAN_API_KEY=llmman-local` in `~/.openclaw/.env`. `llmman serve` takes no arguments; daemon settings such as `LLMMAN_CONTEXT_LENGTH` go in `env`, and the model loads on the first request that names it. Full llmman setup, including hybrid local + hosted routing: [llmman](/providers/llmman).
+Replace `command` with the result of `which llmman` on the machine running OpenClaw, and set `LLMMAN_API_KEY=llmman-local` in `~/.openclaw/.env`. Bare `llmman serve` requires no model argument and loads the model on the first request that names it; an optional model argument preloads it instead. Daemon settings such as `LLMMAN_CONTEXT_LENGTH` go in `env`. Full llmman setup, including hybrid local + hosted routing: [llmman](/providers/llmman).
 
 ## ds4 example
 
