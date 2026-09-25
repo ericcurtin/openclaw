@@ -1,35 +1,35 @@
 package ai.openclaw.app.ui.chat
 
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -42,6 +42,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -54,7 +55,6 @@ import ai.openclaw.app.ui.mobileBorderStrong
 import ai.openclaw.app.ui.mobileCallout
 import ai.openclaw.app.ui.mobileCaption1
 import ai.openclaw.app.ui.mobileCardSurface
-import ai.openclaw.app.ui.mobileHeadline
 import ai.openclaw.app.ui.mobileSurface
 import ai.openclaw.app.ui.mobileText
 import ai.openclaw.app.ui.mobileTextSecondary
@@ -122,45 +122,27 @@ fun ChatComposer(
   val canSend = pendingRunCount == 0 && (input.trim().isNotEmpty() || attachments.isNotEmpty()) && healthOk
   val sendBusy = pendingRunCount > 0
 
-  Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+  Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
     if (attachments.isNotEmpty()) {
       AttachmentsStrip(attachments = attachments, onRemoveAttachment = onRemoveAttachment)
     }
 
-    OutlinedTextField(
-      value = input,
-      onValueChange = { input = it },
-      modifier = Modifier.fillMaxWidth(),
-      placeholder = { Text("Type a message…", style = mobileBodyStyle(), color = mobileTextTertiary) },
-      minLines = 2,
-      maxLines = 5,
-      textStyle = mobileBodyStyle().copy(color = mobileText),
-      shape = RoundedCornerShape(14.dp),
-      colors = chatTextFieldColors(),
-    )
-
-    if (!healthOk) {
-      Text(
-        text = "Gateway is offline. Connect first in the Connect tab.",
-        style = mobileCallout,
-        color = ai.openclaw.app.ui.mobileWarning,
-      )
-    }
-
+    // Slim secondary toolbar: thinking level + refresh/abort. Kept visually light so the
+    // WhatsApp-style input row below stays the primary affordance.
     Row(
       modifier = Modifier.fillMaxWidth(),
       verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      horizontalArrangement = Arrangement.spacedBy(2.dp),
     ) {
       Box {
         Surface(
           onClick = { showThinkingMenu = true },
-          shape = RoundedCornerShape(14.dp),
+          shape = RoundedCornerShape(999.dp),
           color = mobileCardSurface,
-          border = BorderStroke(1.dp, mobileBorderStrong),
+          border = BorderStroke(1.dp, mobileBorder),
         ) {
           Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
+            modifier = Modifier.padding(start = 10.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
           ) {
             Text(
@@ -168,7 +150,7 @@ fun ChatComposer(
               style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
               color = mobileTextSecondary,
             )
-            Icon(Icons.Default.ArrowDropDown, contentDescription = "Select thinking level", modifier = Modifier.size(18.dp), tint = mobileTextTertiary)
+            Icon(Icons.Default.ArrowDropDown, contentDescription = "Select thinking level", modifier = Modifier.size(16.dp), tint = mobileTextTertiary)
           }
         }
 
@@ -188,62 +170,115 @@ fun ChatComposer(
         }
       }
 
-      SecondaryActionButton(
-        label = "Attach",
-        icon = Icons.Default.AttachFile,
-        enabled = true,
-        compact = true,
-        onClick = onPickImages,
-      )
+      Spacer(modifier = Modifier.weight(1f))
 
-      SecondaryActionButton(
+      ToolbarIconButton(
         label = "Refresh",
         icon = Icons.Default.Refresh,
         enabled = true,
-        compact = true,
         onClick = onRefresh,
       )
 
-      SecondaryActionButton(
+      ToolbarIconButton(
         label = "Abort",
         icon = Icons.Default.Stop,
         enabled = pendingRunCount > 0,
-        compact = true,
         onClick = onAbort,
       )
+    }
 
-      Spacer(modifier = Modifier.weight(1f))
+    if (!healthOk) {
+      Text(
+        text = "Gateway is offline. Connect first in the Connect tab.",
+        style = mobileCallout,
+        color = ai.openclaw.app.ui.mobileWarning,
+      )
+    }
 
-      Button(
+    // WhatsApp-style input row: pill-shaped text field (with inline attach) + circular send.
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      verticalAlignment = Alignment.Bottom,
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      ComposerPill(
+        value = input,
+        onValueChange = { input = it },
+        onPickImages = onPickImages,
+        modifier = Modifier.weight(1f),
+      )
+
+      CircularSendButton(
+        enabled = canSend,
+        busy = sendBusy,
         onClick = {
           val text = input
           input = ""
           onSend(text)
         },
-        enabled = canSend,
-        modifier = Modifier.height(44.dp),
-        shape = RoundedCornerShape(14.dp),
-        contentPadding = PaddingValues(horizontal = 20.dp),
-        colors =
-          ButtonDefaults.buttonColors(
-            containerColor = mobileAccent,
-            contentColor = Color.White,
-            disabledContainerColor = mobileBorderStrong,
-            disabledContentColor = mobileTextTertiary,
-          ),
-        border = BorderStroke(1.dp, if (canSend) mobileAccentBorderStrong else mobileBorderStrong),
+      )
+    }
+  }
+}
+
+private val ComposerControlSize = 48.dp
+
+@Composable
+private fun ComposerPill(
+  value: String,
+  onValueChange: (String) -> Unit,
+  onPickImages: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  val textStyle = mobileBodyStyle().copy(color = mobileText)
+  Surface(
+    modifier = modifier.heightIn(min = ComposerControlSize),
+    // Half the resting height => fully rounded pill at one line; stays soft-cornered as it grows.
+    shape = RoundedCornerShape(ComposerControlSize / 2),
+    color = mobileSurface,
+    border = BorderStroke(1.dp, mobileBorder),
+  ) {
+    Row(
+      modifier = Modifier.animateContentSize(),
+      verticalAlignment = Alignment.Bottom,
+    ) {
+      BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier =
+          Modifier
+            .weight(1f)
+            .padding(start = 18.dp, top = 13.dp, bottom = 13.dp),
+        textStyle = textStyle,
+        cursorBrush = SolidColor(mobileAccent),
+        // Grow from one line up to six, then scroll internally (WhatsApp behavior).
+        minLines = 1,
+        maxLines = 6,
+        decorationBox = { innerTextField ->
+          Box(contentAlignment = Alignment.CenterStart) {
+            if (value.isEmpty()) {
+              Text(
+                text = "Type a message…",
+                style = textStyle,
+                color = mobileTextTertiary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+            }
+            innerTextField()
+          }
+        },
+      )
+
+      IconButton(
+        onClick = onPickImages,
+        modifier = Modifier.size(ComposerControlSize),
       ) {
-        if (sendBusy) {
-          CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
-        } else {
-          Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null, modifier = Modifier.size(16.dp))
-        }
-        Spacer(modifier = Modifier.width(6.dp))
-        Text(
-          text = "Send",
-          style = mobileHeadline.copy(fontWeight = FontWeight.Bold),
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
+        Icon(
+          Icons.Default.AttachFile,
+          contentDescription = "Attach",
+          modifier = Modifier.size(22.dp),
+          tint = mobileTextSecondary,
         )
       }
     }
@@ -251,37 +286,48 @@ fun ChatComposer(
 }
 
 @Composable
-private fun SecondaryActionButton(
+private fun CircularSendButton(
+  enabled: Boolean,
+  busy: Boolean,
+  onClick: () -> Unit,
+) {
+  Surface(
+    onClick = onClick,
+    enabled = enabled,
+    modifier = Modifier.size(ComposerControlSize),
+    shape = CircleShape,
+    color = if (enabled) mobileAccent else mobileBorderStrong,
+    contentColor = if (enabled) Color.White else mobileTextTertiary,
+    border = BorderStroke(1.dp, if (enabled) mobileAccentBorderStrong else mobileBorderStrong),
+  ) {
+    Box(contentAlignment = Alignment.Center) {
+      if (busy) {
+        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
+      } else {
+        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send", modifier = Modifier.size(22.dp))
+      }
+    }
+  }
+}
+
+@Composable
+private fun ToolbarIconButton(
   label: String,
   icon: androidx.compose.ui.graphics.vector.ImageVector,
   enabled: Boolean,
-  compact: Boolean = false,
   onClick: () -> Unit,
 ) {
-  Button(
+  IconButton(
     onClick = onClick,
     enabled = enabled,
-    modifier = if (compact) Modifier.size(44.dp) else Modifier.height(44.dp),
-    shape = RoundedCornerShape(14.dp),
+    modifier = Modifier.size(32.dp),
     colors =
-      ButtonDefaults.buttonColors(
-        containerColor = mobileCardSurface,
+      IconButtonDefaults.iconButtonColors(
         contentColor = mobileTextSecondary,
-        disabledContainerColor = mobileCardSurface,
         disabledContentColor = mobileTextTertiary,
       ),
-    border = BorderStroke(1.dp, mobileBorderStrong),
-    contentPadding = if (compact) PaddingValues(0.dp) else ButtonDefaults.ContentPadding,
   ) {
-    Icon(icon, contentDescription = label, modifier = Modifier.size(14.dp))
-    if (!compact) {
-      Spacer(modifier = Modifier.width(5.dp))
-      Text(
-        text = label,
-        style = mobileCallout.copy(fontWeight = FontWeight.SemiBold),
-        color = if (enabled) mobileTextSecondary else mobileTextTertiary,
-      )
-    }
+    Icon(icon, contentDescription = label, modifier = Modifier.size(18.dp))
   }
 }
 
@@ -370,18 +416,6 @@ private fun AttachmentChip(fileName: String, onRemove: () -> Unit) {
     }
   }
 }
-
-@Composable
-private fun chatTextFieldColors() =
-  OutlinedTextFieldDefaults.colors(
-    focusedContainerColor = mobileSurface,
-    unfocusedContainerColor = mobileSurface,
-    focusedBorderColor = mobileAccent,
-    unfocusedBorderColor = mobileBorder,
-    focusedTextColor = mobileText,
-    unfocusedTextColor = mobileText,
-    cursorColor = mobileAccent,
-  )
 
 @Composable
 private fun mobileBodyStyle() =
