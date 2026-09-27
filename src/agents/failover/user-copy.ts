@@ -431,12 +431,18 @@ export function renderRateLimitReplyCopy(params: {
     return BILLING_ERROR_USER_MESSAGE;
   }
   if (attempts.length === 0) {
-    if (params.reason === "rate_limit" && isPeriodicUsageLimitErrorMessage(params.message)) {
-      const providerMessage = renderSanitizedUserFacingText(
-        params.sanitizeText?.(params.message) ?? params.message,
-        { errorContext: true },
-      );
-      return providerMessage.startsWith("⚠️") ? providerMessage : `⚠️ ${providerMessage}`;
+    if (params.reason === "rate_limit") {
+      const sanitizedMessage = params.sanitizeText?.(params.message) ?? params.message;
+      if (isPeriodicUsageLimitErrorMessage(params.message)) {
+        const providerMessage = renderSanitizedUserFacingText(sanitizedMessage, {
+          errorContext: true,
+        });
+        return providerMessage.startsWith("⚠️") ? providerMessage : `⚠️ ${providerMessage}`;
+      }
+      const specificHint = extractProviderRateLimitMessage(sanitizedMessage);
+      if (specificHint) {
+        return specificHint;
+      }
     }
     return RATE_LIMIT_RETRY_MESSAGE;
   }

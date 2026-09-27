@@ -122,6 +122,17 @@ describe("failover user copy", () => {
     );
   });
 
+  it("surfaces a prompt-size rejection in the terminal rate-limit reply", () => {
+    expect(
+      renderRateLimitReplyCopy({
+        message:
+          "400 This prompt is longer than the free tier allows for a single request. Shorten it.",
+        reason: "rate_limit",
+        attempts: [],
+      }),
+    ).toBe("⚠️ This prompt is longer than the free tier allows for a single request. Shorten it.");
+  });
+
   it("uses neutral billing copy for subscription credentials", () => {
     expect(
       renderBillingReplyCopy({
