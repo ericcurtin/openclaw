@@ -73,6 +73,26 @@ export function resolveSubagentAllowedTargetIds(params: {
   };
 }
 
+/** Describe the sessions_spawn `agentId` parameter's allowed targets for a requester. */
+export function describeSubagentSpawnTargetParameter(params: {
+  requesterAgentId: string;
+  allowAgents?: readonly string[];
+  configuredAgentIds?: readonly string[];
+}): string {
+  const requesterAgentId = normalizeAgentId(params.requesterAgentId);
+  const allowed = resolveSubagentAllowedTargetIds(params);
+  const omitClause = requesterAgentId
+    ? `Omit to keep the requester agent ("${requesterAgentId}").`
+    : "Omit to keep the requester agent.";
+  if (allowed.allowAny) {
+    return `Configured agent to target; any configured agent is allowed. ${omitClause}`;
+  }
+  if (allowed.allowedIds.filter((id) => id !== requesterAgentId).length === 0) {
+    return `Only the requester agent is allowed as a target; no other agentId is configured. ${omitClause}`;
+  }
+  return `Configured agent to target: ${allowed.allowedIds.join(", ")}. ${omitClause}`;
+}
+
 /** Validate one requested target against subagent spawn policy. */
 export function resolveSubagentTargetPolicy(params: {
   requesterAgentId: string;

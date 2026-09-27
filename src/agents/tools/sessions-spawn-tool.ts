@@ -11,6 +11,8 @@ import {
   mergeAcceptedSessionSpawnsForRun,
   normalizeAcceptedSessionSpawnResult,
 } from "../accepted-session-spawn.js";
+import { listAgentIds } from "../agent-scope-config.js";
+import { resolveAgentConfig } from "../agent-scope.js";
 import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
 import {
   findAcpUnsupportedInheritedToolAllow,
@@ -27,6 +29,7 @@ import {
   SUBAGENT_SPAWN_MODES,
   spawnSubagentDirect,
 } from "../subagents/spawn/subagent-spawn.js";
+import { describeSubagentSpawnTargetParameter } from "../subagents/spawn/subagent-target-policy.js";
 import { normalizeSubagentTaskName } from "../subagents/spawn/subagent-task-name.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
@@ -151,6 +154,7 @@ function createSessionsSpawnToolSchema(params: {
   threadAvailable: boolean;
   subagentThreadAvailable: boolean;
   swarmEnabled: boolean;
+  agentIdDescription: string;
 }) {
   const spawnModes = params.threadAvailable ? SUBAGENT_SPAWN_MODES : (["run"] as const);
   const schema = {
@@ -170,7 +174,7 @@ function createSessionsSpawnToolSchema(params: {
       params.acpAvailable ? SESSIONS_SPAWN_RUNTIMES : (["subagent"] as const),
       { description: 'Runtime; visible=true requires "subagent".' },
     ),
-    agentId: Type.Optional(Type.String()),
+    agentId: Type.Optional(Type.String({ description: params.agentIdDescription })),
     model: Type.Optional(Type.String()),
     runTimeoutSeconds: Type.Optional(
       Type.Integer({
@@ -350,11 +354,19 @@ export function createSessionsSpawnTool(
     requesterAgentId,
     sandboxed: opts?.sandboxed,
   });
+  const agentIdDescription = describeSubagentSpawnTargetParameter({
+    requesterAgentId: requesterAgentId ?? "",
+    allowAgents:
+      resolveAgentConfig(effectiveConfig, requesterAgentId ?? "")?.subagents?.allowAgents ??
+      effectiveConfig.agents?.defaults?.subagents?.allowAgents,
+    configuredAgentIds: listAgentIds(effectiveConfig),
+  });
   const parameters = createSessionsSpawnToolSchema({
     acpAvailable,
     threadAvailable,
     subagentThreadAvailable: threadAvailability.subagent,
     swarmEnabled: swarmConfig.enabled,
+    agentIdDescription,
   });
   const tool: AnyAgentTool = {
     label: "Sessions",

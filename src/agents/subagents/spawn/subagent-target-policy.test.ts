@@ -2,6 +2,7 @@
 // wildcard target sets, and stale configured-agent filtering.
 import { describe, expect, it } from "vitest";
 import {
+  describeSubagentSpawnTargetParameter,
   resolveSubagentAllowedTargetIds,
   resolveSubagentTargetPolicy,
 } from "./subagent-target-policy.js";
@@ -94,6 +95,40 @@ describe("subagent target policy", () => {
     }
     expect(result.error).toBe(
       'agentId "beta" is not in the configured agent registry (allowed: main, planner)',
+    );
+  });
+
+  it("describes the requester-only default target", () => {
+    expect(
+      describeSubagentSpawnTargetParameter({
+        requesterAgentId: "main",
+      }),
+    ).toBe(
+      "Only the requester agent is allowed as a target; no other agentId is configured. " +
+        'Omit to keep the requester agent ("main").',
+    );
+  });
+
+  it("describes an explicit allowlist target", () => {
+    expect(
+      describeSubagentSpawnTargetParameter({
+        requesterAgentId: "main",
+        allowAgents: ["main", "planner"],
+        configuredAgentIds: ["main", "planner"],
+      }),
+    ).toBe('Configured agent to target: main, planner. Omit to keep the requester agent ("main").');
+  });
+
+  it("describes a wildcard allowlist target", () => {
+    expect(
+      describeSubagentSpawnTargetParameter({
+        requesterAgentId: "main",
+        allowAgents: ["*"],
+        configuredAgentIds: ["main", "planner"],
+      }),
+    ).toBe(
+      "Configured agent to target; any configured agent is allowed. " +
+        'Omit to keep the requester agent ("main").',
     );
   });
 });
