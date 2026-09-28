@@ -22,6 +22,7 @@ import {
 } from "../inherited-tool-deny.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
+import { describeAcpSpawnTargetParameter } from "../subagents/spawn/acp-spawn-target.js";
 import { withParentExecutionIdentity } from "../subagents/spawn/execution-identity-spawn-context.js";
 import { resolveAcpSessionsSpawnImageAttachments } from "../subagents/spawn/subagent-attachments.js";
 import {
@@ -354,13 +355,16 @@ export function createSessionsSpawnTool(
     requesterAgentId,
     sandboxed: opts?.sandboxed,
   });
-  const agentIdDescription = describeSubagentSpawnTargetParameter({
+  const nativeAgentIdDescription = describeSubagentSpawnTargetParameter({
     requesterAgentId: requesterAgentId ?? "",
     allowAgents:
       resolveAgentConfig(effectiveConfig, requesterAgentId ?? "")?.subagents?.allowAgents ??
       effectiveConfig.agents?.defaults?.subagents?.allowAgents,
     configuredAgentIds: listAgentIds(effectiveConfig),
   });
+  const agentIdDescription = acpAvailable
+    ? `With runtime="subagent" (default): ${nativeAgentIdDescription} With runtime="acp": ${describeAcpSpawnTargetParameter(effectiveConfig)}`
+    : nativeAgentIdDescription;
   const parameters = createSessionsSpawnToolSchema({
     acpAvailable,
     threadAvailable,

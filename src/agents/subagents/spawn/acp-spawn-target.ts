@@ -94,6 +94,25 @@ function isExplicitlyAllowedAcpAgent(cfg: OpenClawConfig, agentId: string): bool
   });
 }
 
+/** Describe the sessions_spawn `agentId` parameter for `runtime="acp"`. */
+export function describeAcpSpawnTargetParameter(cfg: OpenClawConfig): string {
+  const allowAny = (cfg.acp?.allowedAgents ?? []).some((entry) => entry.trim() === "*");
+  const defaultAgentId = normalizeOptionalAgentId(cfg.acp?.defaultAgent);
+  const omitClause = defaultAgentId
+    ? `Omit to use the configured ACP default ("${defaultAgentId}").`
+    : "agentId is required; no acp.defaultAgent is configured.";
+  if (allowAny) {
+    return `ACP harness id; any harness is allowed. ${omitClause}`;
+  }
+  const configuredIds = resolveConfiguredAcpSubagentTargetIds(cfg).sort((a, b) =>
+    a.localeCompare(b),
+  );
+  if (configuredIds.length > 0) {
+    return `ACP harness id from: ${configuredIds.join(", ")}. ${omitClause}`;
+  }
+  return `ACP harness id; none are configured yet. ${omitClause}`;
+}
+
 export function resolveConfiguredAcpSubagentTargetIds(cfg: OpenClawConfig): string[] {
   const ids = new Set<string>(listAgentIds(cfg));
   for (const agent of listAgentEntries(cfg)) {

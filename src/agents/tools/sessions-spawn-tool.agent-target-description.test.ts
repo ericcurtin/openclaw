@@ -1,7 +1,18 @@
 // Covers the sessions_spawn agentId schema description for the requester's
-// resolved target policy (default, explicit allowlist, wildcard).
-import { expect, it } from "vitest";
+// resolved target policy (default, explicit allowlist, wildcard) and the
+// separate ACP harness guidance shown when runtime="acp" is available.
+import { afterEach, beforeAll, expect, it } from "vitest";
 import { createSessionsSpawnTool } from "./sessions-spawn-tool.js";
+
+let acpRuntimeRegistry: typeof import("../../acp/runtime/registry.js");
+
+beforeAll(async () => {
+  acpRuntimeRegistry = await import("../../acp/runtime/registry.js");
+});
+
+afterEach(() => {
+  acpRuntimeRegistry.testing.resetAcpRuntimeBackendsForTests();
+});
 
 function requireAgentIdDescription(tool: ReturnType<typeof createSessionsSpawnTool>): string {
   const schema = tool.parameters as { properties: Record<string, { description?: string }> };
@@ -45,4 +56,29 @@ it("describes a wildcard allowlist target", () => {
   });
   const description = requireAgentIdDescription(tool);
   expect(description).toContain("any configured agent is allowed");
+});
+
+it("describes both runtimes separately when ACP is available", () => {
+  acpRuntimeRegistry.registerAcpRuntimeBackend({
+    id: "acpx",
+    runtime: {
+      ensureSession: async () => ({
+        sessionKey: "agent:codex:acp:1",
+        backend: "acpx",
+        runtimeSessionName: "codex",
+      }),
+      async *runTurn() {},
+      cancel: async () => {},
+      close: async () => {},
+    },
+  });
+  const tool = createSessionsSpawnTool({
+    agentSessionKey: "agent:main:main",
+    config: { acp: { defaultAgent: "codex" } },
+  });
+  const description = requireAgentIdDescription(tool);
+  expect(description).toContain('With runtime="subagent" (default):');
+  expect(description).toContain("Only the requester agent is allowed");
+  expect(description).toContain('With runtime="acp":');
+  expect(description).toContain('Omit to use the configured ACP default ("codex")');
 });

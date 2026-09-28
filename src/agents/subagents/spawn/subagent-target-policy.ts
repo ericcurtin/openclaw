@@ -45,13 +45,14 @@ export function resolveSubagentAllowedTargetIds(params: {
   requesterAgentId: string;
   allowAgents?: readonly string[];
   configuredAgentIds?: readonly string[];
-}): { allowAny: boolean; allowedIds: string[] } {
+}): { allowAny: boolean; allowedIds: string[]; explicitAllowlistConfigured: boolean } {
   const requesterAgentId = normalizeAgentId(params.requesterAgentId);
   const policy = normalizeAllowAgents(params.allowAgents);
   if (!policy.configured) {
     return {
       allowAny: false,
       allowedIds: requesterAgentId ? [requesterAgentId] : [],
+      explicitAllowlistConfigured: false,
     };
   }
   if (policy.allowAny) {
@@ -62,6 +63,7 @@ export function resolveSubagentAllowedTargetIds(params: {
     return {
       allowAny: true,
       allowedIds: sortUniqueStrings(configuredIds),
+      explicitAllowlistConfigured: true,
     };
   }
   const configuredIds = normalizeConfiguredAgentIds(params.configuredAgentIds);
@@ -70,6 +72,7 @@ export function resolveSubagentAllowedTargetIds(params: {
     allowedIds: policy.allowedIds
       .filter((id) => configuredIds.has(id))
       .toSorted((a, b) => a.localeCompare(b)),
+    explicitAllowlistConfigured: true,
   };
 }
 
@@ -86,6 +89,9 @@ export function describeSubagentSpawnTargetParameter(params: {
     : "Omit to keep the requester agent.";
   if (allowed.allowAny) {
     return `Configured agent to target; any configured agent is allowed. ${omitClause}`;
+  }
+  if (allowed.allowedIds.length === 0 && allowed.explicitAllowlistConfigured) {
+    return `No agentId is allowed as an explicit target; the configured allowlist is empty. ${omitClause}`;
   }
   if (allowed.allowedIds.filter((id) => id !== requesterAgentId).length === 0) {
     return `Only the requester agent is allowed as a target; no other agentId is configured. ${omitClause}`;

@@ -38,6 +38,7 @@ describe("subagent target policy", () => {
     ).toEqual({
       allowAny: false,
       allowedIds: ["planner"],
+      explicitAllowlistConfigured: true,
     });
 
     const result = resolveSubagentTargetPolicy({
@@ -67,6 +68,7 @@ describe("subagent target policy", () => {
     ).toEqual({
       allowAny: true,
       allowedIds: ["checker", "main", "planner"],
+      explicitAllowlistConfigured: true,
     });
   });
 
@@ -80,6 +82,7 @@ describe("subagent target policy", () => {
     ).toEqual({
       allowAny: true,
       allowedIds: ["main", "planner"],
+      explicitAllowlistConfigured: true,
     });
 
     const result = resolveSubagentTargetPolicy({
@@ -130,5 +133,25 @@ describe("subagent target policy", () => {
       "Configured agent to target; any configured agent is allowed. " +
         'Omit to keep the requester agent ("main").',
     );
+  });
+
+  it("describes an explicitly empty allowlist without implying the requester id works", () => {
+    const description = describeSubagentSpawnTargetParameter({
+      requesterAgentId: "main",
+      allowAgents: [],
+      configuredAgentIds: ["main"],
+    });
+    expect(description).toBe(
+      "No agentId is allowed as an explicit target; the configured allowlist is empty. " +
+        'Omit to keep the requester agent ("main").',
+    );
+    const result = resolveSubagentTargetPolicy({
+      requesterAgentId: "main",
+      targetAgentId: "main",
+      requestedAgentId: "main",
+      allowAgents: [],
+      configuredAgentIds: ["main"],
+    });
+    expect(result.ok).toBe(false);
   });
 });
