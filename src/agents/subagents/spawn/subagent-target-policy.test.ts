@@ -186,6 +186,18 @@ describe("subagent target policy", () => {
       allowAgents: ["main", "lead"],
       requireAgentId: false,
     });
+    // Each field falls back on its own: an override of one keeps the default of the other.
+    expect(
+      resolveSubagentSpawnTargetConfig(
+        {
+          agents: {
+            defaults: { subagents: { requireAgentId: true } },
+            list: [{ id: "main", subagents: { allowAgents: ["*"] } }],
+          },
+        },
+        "main",
+      ),
+    ).toEqual({ allowAgents: ["*"], requireAgentId: true });
     expect(resolveSubagentSpawnTargetConfig({}, "main")).toEqual({
       allowAgents: undefined,
       requireAgentId: false,

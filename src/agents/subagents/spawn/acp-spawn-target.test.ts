@@ -56,11 +56,19 @@ describe("describeAcpSpawnTargetParameter", () => {
   });
 
   it("does not advertise wildcard access the policy does not grant", () => {
-    const description = describeAcpSpawnTargetParameter({
-      agents: { list: [] },
-      acp: { allowedAgents: ["*"], defaultAgent: "codex" },
-    });
-    expect(description).not.toContain("any harness");
-    expect(description).not.toContain("Omit to use");
+    expect(
+      describeAcpSpawnTargetParameter({
+        agents: { list: [] },
+        acp: { allowedAgents: ["*"], defaultAgent: "codex" },
+      }),
+    ).toBe(
+      "ACP harness id; acp.allowedAgents allows none. agentId is required; no usable acp.defaultAgent is configured.",
+    );
+  });
+
+  it("does not offer the implicit main agent when no roster is configured", () => {
+    expect(describeAcpSpawnTargetParameter({})).toBe(
+      "ACP harness id, for example: codex, claude. agentId is required; no usable acp.defaultAgent is configured.",
+    );
   });
 });
