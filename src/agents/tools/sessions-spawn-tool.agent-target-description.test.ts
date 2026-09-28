@@ -58,7 +58,7 @@ it("describes a wildcard allowlist target", () => {
   expect(description).toContain("any configured agent is allowed");
 });
 
-it("describes both runtimes separately when ACP is available", () => {
+function registerStubAcpBackend() {
   acpRuntimeRegistry.registerAcpRuntimeBackend({
     id: "acpx",
     runtime: {
@@ -72,6 +72,20 @@ it("describes both runtimes separately when ACP is available", () => {
       close: async () => {},
     },
   });
+}
+
+it("requires an explicit agentId when requireAgentId is configured", () => {
+  const tool = createSessionsSpawnTool({
+    agentSessionKey: "agent:main:main",
+    config: { agents: { defaults: { subagents: { requireAgentId: true } } } },
+  });
+  const description = requireAgentIdDescription(tool);
+  expect(description).toContain('agentId is required; the requester agent is "main"');
+  expect(description).not.toContain("Omit to keep");
+});
+
+it("describes both runtimes separately when ACP is available", () => {
+  registerStubAcpBackend();
   const tool = createSessionsSpawnTool({
     agentSessionKey: "agent:main:main",
     config: { acp: { defaultAgent: "codex" } },

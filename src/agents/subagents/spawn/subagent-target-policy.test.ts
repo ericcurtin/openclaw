@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   describeSubagentSpawnTargetParameter,
   resolveSubagentAllowedTargetIds,
+  resolveSubagentSpawnTargetConfig,
   resolveSubagentTargetPolicy,
 } from "./subagent-target-policy.js";
 
@@ -153,5 +154,41 @@ describe("subagent target policy", () => {
       configuredAgentIds: ["main"],
     });
     expect(result.ok).toBe(false);
+  });
+  it("tells the model an explicit agentId is required when requireAgentId is set", () => {
+    expect(
+      describeSubagentSpawnTargetParameter({
+        requesterAgentId: "main",
+        allowAgents: ["main", "planner"],
+        configuredAgentIds: ["main", "planner"],
+        requireAgentId: true,
+      }),
+    ).toBe(
+      'Configured agent to target: main, planner. agentId is required; the requester agent is "main".',
+    );
+  });
+
+  it("resolves spawn target settings from the agent override, then defaults", () => {
+    const cfg = {
+      agents: {
+        defaults: { subagents: { allowAgents: ["main"], requireAgentId: true } },
+        list: [
+          { id: "main" },
+          { id: "lead", subagents: { allowAgents: ["main", "lead"], requireAgentId: false } },
+        ],
+      },
+    };
+    expect(resolveSubagentSpawnTargetConfig(cfg, "main")).toEqual({
+      allowAgents: ["main"],
+      requireAgentId: true,
+    });
+    expect(resolveSubagentSpawnTargetConfig(cfg, "lead")).toEqual({
+      allowAgents: ["main", "lead"],
+      requireAgentId: false,
+    });
+    expect(resolveSubagentSpawnTargetConfig({}, "main")).toEqual({
+      allowAgents: undefined,
+      requireAgentId: false,
+    });
   });
 });

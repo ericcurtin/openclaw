@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { hasAcpAgentAllowlist, resolveAcpAgentPolicyError } from "../../../acp/policy.js";
 import { getAcpRuntimeBackend } from "../../../acp/runtime/registry.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizeAgentIdStrict, normalizeOptionalAgentId } from "../../../routing/session-key.js";
@@ -96,21 +97,26 @@ function isExplicitlyAllowedAcpAgent(cfg: OpenClawConfig, agentId: string): bool
 
 /** Describe the sessions_spawn `agentId` parameter for `runtime="acp"`. */
 export function describeAcpSpawnTargetParameter(cfg: OpenClawConfig): string {
-  const allowAny = (cfg.acp?.allowedAgents ?? []).some((entry) => entry.trim() === "*");
+  // Ask the real admission path so the text never advertises a rejected id.
+  const isAccepted = (requestedAgentId?: string) => {
+    const target = resolveTargetAcpAgentId({ requestedAgentId, cfg });
+    return target.ok && resolveAcpAgentPolicyError(cfg, target.agentId) === null;
+  };
   const defaultAgentId = normalizeOptionalAgentId(cfg.acp?.defaultAgent);
-  const omitClause = defaultAgentId
-    ? `Omit to use the configured ACP default ("${defaultAgentId}").`
-    : "agentId is required; no acp.defaultAgent is configured.";
-  if (allowAny) {
-    return `ACP harness id; any harness is allowed. ${omitClause}`;
+  const omitClause =
+    defaultAgentId && isAccepted()
+      ? `Omit to use the configured ACP default ("${defaultAgentId}").`
+      : "agentId is required; no usable acp.defaultAgent is configured.";
+  const acceptedIds = resolveConfiguredAcpSubagentTargetIds(cfg)
+    .filter((id) => isAccepted(id))
+    .toSorted((a, b) => a.localeCompare(b));
+  if (hasAcpAgentAllowlist(cfg)) {
+    return acceptedIds.length > 0
+      ? `ACP harness id from: ${acceptedIds.join(", ")}. ${omitClause}`
+      : `ACP harness id; acp.allowedAgents allows none. ${omitClause}`;
   }
-  const configuredIds = resolveConfiguredAcpSubagentTargetIds(cfg).sort((a, b) =>
-    a.localeCompare(b),
-  );
-  if (configuredIds.length > 0) {
-    return `ACP harness id from: ${configuredIds.join(", ")}. ${omitClause}`;
-  }
-  return `ACP harness id; none are configured yet. ${omitClause}`;
+  const examples = acceptedIds.length > 0 ? acceptedIds.join(", ") : "codex, claude";
+  return `ACP harness id, for example: ${examples}. ${omitClause}`;
 }
 
 export function resolveConfiguredAcpSubagentTargetIds(cfg: OpenClawConfig): string[] {

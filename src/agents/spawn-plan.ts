@@ -18,12 +18,14 @@ import {
 } from "../config/agent-limits.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
-import { resolveAgentConfig } from "./agent-scope.js";
 import { resolveChildAdmission, type ChildAdmissionCap } from "./child-admission.js";
 import { countActiveRunsForSession } from "./subagents/registry/subagent-registry.js";
 import { resolveSubagentCapabilities } from "./subagents/spawn/subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagents/spawn/subagent-depth.js";
-import { resolveSubagentTargetPolicy } from "./subagents/spawn/subagent-target-policy.js";
+import {
+  resolveSubagentSpawnTargetConfig,
+  resolveSubagentTargetPolicy,
+} from "./subagents/spawn/subagent-target-policy.js";
 
 type SpawnMode = "run" | "session";
 type SpawnBackendKind = "subagent" | "acp";
@@ -328,14 +330,10 @@ export function resolveSpawnAdmission(params: {
   if (!childAdmission.ok) {
     return childAdmission;
   }
-  const requesterSubagentConfig = resolveAgentConfig(
+  const { allowAgents, requireAgentId } = resolveSubagentSpawnTargetConfig(
     params.cfg,
     params.requesterAgentId,
-  )?.subagents;
-  const requireAgentId =
-    requesterSubagentConfig?.requireAgentId ??
-    params.cfg.agents?.defaults?.subagents?.requireAgentId ??
-    false;
+  );
   if (requireAgentId && !params.requestedAgentId?.trim()) {
     return {
       ok: false,
@@ -347,8 +345,7 @@ export function resolveSpawnAdmission(params: {
     requesterAgentId: params.requesterAgentId,
     targetAgentId: params.targetAgentId,
     requestedAgentId: params.requestedAgentId,
-    allowAgents:
-      requesterSubagentConfig?.allowAgents ?? params.cfg.agents?.defaults?.subagents?.allowAgents,
+    allowAgents,
     configuredAgentIds: params.configuredAgentIds,
   });
   if (!targetPolicy.ok) {

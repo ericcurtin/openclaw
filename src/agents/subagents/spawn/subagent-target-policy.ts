@@ -6,7 +6,9 @@ import {
   normalizeUniqueStringEntries,
   sortUniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
+import { resolveAgentConfig } from "../../agent-scope-config.js";
 
 type SubagentTargetPolicyResult = { ok: true } | { ok: false; allowedText: string; error: string };
 
@@ -76,17 +78,31 @@ export function resolveSubagentAllowedTargetIds(params: {
   };
 }
 
+/** Resolve a requester's effective spawn target settings: agent override, then defaults. */
+export function resolveSubagentSpawnTargetConfig(
+  cfg: OpenClawConfig,
+  requesterAgentId: string,
+): { allowAgents: string[] | undefined; requireAgentId: boolean } {
+  const subagents = resolveAgentConfig(cfg, requesterAgentId)?.subagents;
+  const defaults = cfg.agents?.defaults?.subagents;
+  return {
+    allowAgents: subagents?.allowAgents ?? defaults?.allowAgents,
+    requireAgentId: subagents?.requireAgentId ?? defaults?.requireAgentId ?? false,
+  };
+}
+
 /** Describe the sessions_spawn `agentId` parameter's allowed targets for a requester. */
 export function describeSubagentSpawnTargetParameter(params: {
   requesterAgentId: string;
   allowAgents?: readonly string[];
   configuredAgentIds?: readonly string[];
+  requireAgentId?: boolean;
 }): string {
   const requesterAgentId = normalizeAgentId(params.requesterAgentId);
   const allowed = resolveSubagentAllowedTargetIds(params);
-  const omitClause = requesterAgentId
-    ? `Omit to keep the requester agent ("${requesterAgentId}").`
-    : "Omit to keep the requester agent.";
+  const omitClause = params.requireAgentId
+    ? `agentId is required; the requester agent is "${requesterAgentId}".`
+    : `Omit to keep the requester agent ("${requesterAgentId}").`;
   if (allowed.allowAny) {
     return `Configured agent to target; any configured agent is allowed. ${omitClause}`;
   }

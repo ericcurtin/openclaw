@@ -12,7 +12,6 @@ import {
   normalizeAcceptedSessionSpawnResult,
 } from "../accepted-session-spawn.js";
 import { listAgentIds } from "../agent-scope-config.js";
-import { resolveAgentConfig } from "../agent-scope.js";
 import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
 import {
   findAcpUnsupportedInheritedToolAllow,
@@ -30,7 +29,10 @@ import {
   SUBAGENT_SPAWN_MODES,
   spawnSubagentDirect,
 } from "../subagents/spawn/subagent-spawn.js";
-import { describeSubagentSpawnTargetParameter } from "../subagents/spawn/subagent-target-policy.js";
+import {
+  describeSubagentSpawnTargetParameter,
+  resolveSubagentSpawnTargetConfig,
+} from "../subagents/spawn/subagent-target-policy.js";
 import { normalizeSubagentTaskName } from "../subagents/spawn/subagent-task-name.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
@@ -357,9 +359,7 @@ export function createSessionsSpawnTool(
   });
   const nativeAgentIdDescription = describeSubagentSpawnTargetParameter({
     requesterAgentId: requesterAgentId ?? "",
-    allowAgents:
-      resolveAgentConfig(effectiveConfig, requesterAgentId ?? "")?.subagents?.allowAgents ??
-      effectiveConfig.agents?.defaults?.subagents?.allowAgents,
+    ...resolveSubagentSpawnTargetConfig(effectiveConfig, requesterAgentId ?? ""),
     configuredAgentIds: listAgentIds(effectiveConfig),
   });
   const agentIdDescription = acpAvailable
