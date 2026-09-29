@@ -11,7 +11,6 @@ import {
   mergeAcceptedSessionSpawnsForRun,
   normalizeAcceptedSessionSpawnResult,
 } from "../accepted-session-spawn.js";
-import { listAgentIds } from "../agent-scope-config.js";
 import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
 import {
   findAcpUnsupportedInheritedToolAllow,
@@ -21,19 +20,13 @@ import {
 } from "../inherited-tool-deny.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
-import { describeAcpSpawnTargetParameter } from "../subagents/spawn/acp-spawn-target.js";
 import { withParentExecutionIdentity } from "../subagents/spawn/execution-identity-spawn-context.js";
 import { resolveAcpSessionsSpawnImageAttachments } from "../subagents/spawn/subagent-attachments.js";
-import { isSubagentEnvelopeSession } from "../subagents/spawn/subagent-capabilities.js";
 import {
   SUBAGENT_SPAWN_CONTEXT_MODES,
   SUBAGENT_SPAWN_MODES,
   spawnSubagentDirect,
 } from "../subagents/spawn/subagent-spawn.js";
-import {
-  describeSubagentSpawnTargetParameter,
-  resolveSubagentSpawnTargetConfig,
-} from "../subagents/spawn/subagent-target-policy.js";
 import { normalizeSubagentTaskName } from "../subagents/spawn/subagent-task-name.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
@@ -70,6 +63,7 @@ import {
   resolveEffectiveSessionToolsVisibility,
   resolveSandboxedSessionToolContext,
 } from "./sessions-helpers.js";
+import { describeSessionsSpawnAgentId } from "./sessions-spawn-agent-id.js";
 import {
   maybeSpawnVisibleSession,
   type VisibleSessionsSpawnDeps,
@@ -368,20 +362,13 @@ export function createSessionsSpawnTool(
     requesterAgentId,
     sandboxed: opts?.sandboxed,
   });
-  const nativeAgentIdDescription = describeSubagentSpawnTargetParameter({
-    requesterAgentId: requesterAgentId ?? "",
-    ...resolveSubagentSpawnTargetConfig(effectiveConfig, requesterAgentId ?? ""),
-    configuredAgentIds: listAgentIds(effectiveConfig),
+  const agentIdDescription = describeSessionsSpawnAgentId({
+    cfg: effectiveConfig,
+    requesterAgentId,
+    agentSessionKey: opts?.agentSessionKey,
+    acpAvailable,
     collectDefaultAgentId: swarmConfig.enabled ? swarmConfig.defaultAgentId : undefined,
   });
-  // Same classification as ACP spawn admission, so guidance matches what it accepts.
-  const subagentRequesterId =
-    acpAvailable && isSubagentEnvelopeSession(opts?.agentSessionKey, { cfg: effectiveConfig })
-      ? (requesterAgentId ?? "")
-      : undefined;
-  const agentIdDescription = acpAvailable
-    ? `With runtime="subagent" (default): ${nativeAgentIdDescription} With runtime="acp": ${describeAcpSpawnTargetParameter(effectiveConfig, subagentRequesterId)}`
-    : nativeAgentIdDescription;
   const parameters = createSessionsSpawnToolSchema({
     acpAvailable,
     threadAvailable,

@@ -120,7 +120,7 @@ it("narrows ACP guidance to requester admission for a subagent requester", () =>
   expect(main).toContain('Omit to use the configured ACP default ("codex")');
 });
 
-it("narrows ACP guidance for an ACP requester stored as a subagent", async () => {
+it("narrows ACP guidance for requesters stored as subagents", async () => {
   registerStubAcpBackend();
   const config = {
     acp: { defaultAgent: "codex" },
@@ -128,22 +128,27 @@ it("narrows ACP guidance for an ACP requester stored as a subagent", async () =>
       list: [{ id: "main", subagents: { allowAgents: ["codex"], requireAgentId: true } }],
     },
   };
-  const agentSessionKey = "agent:main:acp:child";
-  const describe = () =>
+  const describe = (agentSessionKey: string) =>
     requireAgentIdDescription(createSessionsSpawnTool({ agentSessionKey, config }));
+  const storedSubagents = {
+    "agent:main:acp:child": { spawnedBy: "agent:main:subagent:parent" },
+    "agent:main:dashboard:child": { spawnedBy: "agent:main:subagent:parent", spawnDepth: 1 },
+  };
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    expect(describe()).toContain('Omit to use the configured ACP default ("codex")');
-    await upsertSessionEntryCore(
-      {
-        agentId: "main",
-        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
-        sessionKey: agentSessionKey,
-      },
-      { sessionId: "acp-child", updatedAt: 1, spawnedBy: "agent:main:subagent:parent" },
-    );
-    expect(describe()).toContain(
-      'With runtime="acp": ACP harness id from: codex. agentId is required.',
-    );
+    for (const [sessionKey, envelope] of Object.entries(storedSubagents)) {
+      expect(describe(sessionKey)).toContain('Omit to use the configured ACP default ("codex")');
+      await upsertSessionEntryCore(
+        {
+          agentId: "main",
+          storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+          sessionKey,
+        },
+        { sessionId: sessionKey, updatedAt: 1, ...envelope },
+      );
+      expect(describe(sessionKey)).toContain(
+        'With runtime="acp": ACP harness id from: codex. agentId is required.',
+      );
+    }
   });
 });
 
