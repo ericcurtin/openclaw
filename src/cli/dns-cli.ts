@@ -25,10 +25,7 @@ function assertSpawnSucceeded(
   opts?: Pick<RunOpts, "allowFailure" | "timeoutMs">,
 ): void {
   if (res.error) {
-    if (
-      opts?.timeoutMs !== undefined &&
-      (res.error as NodeJS.ErrnoException).code === "ETIMEDOUT"
-    ) {
+    if (opts?.timeoutMs !== undefined && "code" in res.error && res.error.code === "ETIMEDOUT") {
       throw new Error(
         `${label} failed: timed out after ${opts.timeoutMs / 1000} seconds (signal ${res.signal ?? "SIGKILL"})`,
         { cause: res.error },
