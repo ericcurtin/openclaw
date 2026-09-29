@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest";
 import {
   describeSubagentSpawnTargetParameter,
+  resolveRequesterSpawnTargetPolicy,
   resolveSubagentAllowedTargetIds,
   resolveSubagentSpawnTargetConfig,
   resolveSubagentTargetPolicy,
@@ -166,6 +167,58 @@ describe("subagent target policy", () => {
     ).toBe(
       'Configured agent to target: main, planner. agentId is required; the requester agent is "main".',
     );
+  });
+
+  it("names the collector default agent used when collect=true omits agentId", () => {
+    expect(
+      describeSubagentSpawnTargetParameter({
+        requesterAgentId: "main",
+        allowAgents: ["main", "planner"],
+        configuredAgentIds: ["main", "planner"],
+        collectDefaultAgentId: "planner",
+      }),
+    ).toBe(
+      'Configured agent to target: main, planner. Omit to keep the requester agent ("main"). ' +
+        'With collect=true, omit to target tools.swarm.defaultAgentId ("planner").',
+    );
+  });
+
+  it("requires agentId for collect=true when the collector default is not allowed", () => {
+    const description = describeSubagentSpawnTargetParameter({
+      requesterAgentId: "main",
+      configuredAgentIds: ["main", "planner"],
+      collectDefaultAgentId: "planner",
+    });
+    expect(description).toContain(
+      'With collect=true, agentId is required; tools.swarm.defaultAgentId ("planner") is not an allowed target.',
+    );
+  });
+
+  it("checks a target against the requester's requireAgentId and allowAgents", () => {
+    const cfg = {
+      agents: {
+        list: [{ id: "main", subagents: { allowAgents: ["planner"], requireAgentId: true } }],
+      },
+    };
+    const base = { cfg, requesterAgentId: "main", configuredAgentIds: ["main", "planner"] };
+    expect(resolveRequesterSpawnTargetPolicy({ ...base, targetAgentId: "planner" })).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("requires explicit agentId"),
+    });
+    expect(
+      resolveRequesterSpawnTargetPolicy({
+        ...base,
+        targetAgentId: "planner",
+        requestedAgentId: "planner",
+      }),
+    ).toEqual({ ok: true });
+    expect(
+      resolveRequesterSpawnTargetPolicy({
+        ...base,
+        targetAgentId: "main",
+        requestedAgentId: "main",
+      }),
+    ).toEqual({ ok: false, error: expect.stringContaining("not allowed") });
   });
 
   it("resolves spawn target settings from the agent override, then defaults", () => {

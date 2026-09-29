@@ -96,3 +96,52 @@ it("describes both runtimes separately when ACP is available", () => {
   expect(description).toContain('With runtime="acp":');
   expect(description).toContain('Omit to use the configured ACP default ("codex")');
 });
+
+it("narrows ACP guidance to requester admission for a subagent requester", () => {
+  registerStubAcpBackend();
+  const config = {
+    acp: { defaultAgent: "codex" },
+    agents: {
+      list: [{ id: "main", subagents: { allowAgents: ["codex"], requireAgentId: true } }],
+    },
+  };
+  const subagent = requireAgentIdDescription(
+    createSessionsSpawnTool({ agentSessionKey: "agent:main:subagent:child", config }),
+  );
+  expect(subagent).toContain(
+    'With runtime="acp": ACP harness id from: codex. agentId is required.',
+  );
+  const main = requireAgentIdDescription(
+    createSessionsSpawnTool({ agentSessionKey: "agent:main:main", config }),
+  );
+  expect(main).toContain('Omit to use the configured ACP default ("codex")');
+});
+
+it("names the Swarm collector default agent for collect=true", () => {
+  const description = requireAgentIdDescription(
+    createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: {
+        tools: { swarm: { defaultAgentId: "planner" } },
+        agents: {
+          defaults: { subagents: { allowAgents: ["main", "planner"] } },
+          list: [{ id: "main" }, { id: "planner" }],
+        },
+      },
+    }),
+  );
+  expect(description).toContain('Omit to keep the requester agent ("main")');
+  expect(description).toContain(
+    'With collect=true, omit to target tools.swarm.defaultAgentId ("planner")',
+  );
+});
+
+it("omits the collector default when Swarm is disabled", () => {
+  const description = requireAgentIdDescription(
+    createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: { tools: { swarm: { enabled: false, defaultAgentId: "planner" } } },
+    }),
+  );
+  expect(description).not.toContain("collect=true");
+});

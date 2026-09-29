@@ -7,7 +7,7 @@ import {
   sortUniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { normalizeAgentId } from "../../../routing/session-key.js";
+import { isValidAgentId, normalizeAgentId } from "../../../routing/session-key.js";
 import { resolveAgentConfig } from "../../agent-scope-config.js";
 
 type SubagentTargetPolicyResult = { ok: true } | { ok: false; allowedText: string; error: string };
@@ -97,22 +97,53 @@ export function describeSubagentSpawnTargetParameter(params: {
   allowAgents?: readonly string[];
   configuredAgentIds?: readonly string[];
   requireAgentId?: boolean;
+  /** `tools.swarm.defaultAgentId`, used when collect=true omits agentId. */
+  collectDefaultAgentId?: string;
 }): string {
   const requesterAgentId = normalizeAgentId(params.requesterAgentId);
   const allowed = resolveSubagentAllowedTargetIds(params);
   const omitClause = params.requireAgentId
     ? `agentId is required; the requester agent is "${requesterAgentId}".`
     : `Omit to keep the requester agent ("${requesterAgentId}").`;
+  const collectId = params.collectDefaultAgentId;
+  const collectClause = !collectId
+    ? ""
+    : isValidAgentId(collectId) && allowed.allowedIds.includes(normalizeAgentId(collectId))
+      ? ` With collect=true, omit to target tools.swarm.defaultAgentId ("${collectId}").`
+      : ` With collect=true, agentId is required; tools.swarm.defaultAgentId ("${collectId}") is not an allowed target.`;
   if (allowed.allowAny) {
-    return `Configured agent to target; any configured agent is allowed. ${omitClause}`;
+    return `Configured agent to target; any configured agent is allowed. ${omitClause}${collectClause}`;
   }
   if (allowed.allowedIds.length === 0 && allowed.explicitAllowlistConfigured) {
-    return `No agentId is allowed as an explicit target; the configured allowlist is empty. ${omitClause}`;
+    return `No agentId is allowed as an explicit target; the configured allowlist is empty. ${omitClause}${collectClause}`;
   }
   if (allowed.allowedIds.filter((id) => id !== requesterAgentId).length === 0) {
-    return `Only the requester agent is allowed as a target; no other agentId is configured. ${omitClause}`;
+    return `Only the requester agent is allowed as a target; no other agentId is configured. ${omitClause}${collectClause}`;
   }
-  return `Configured agent to target: ${allowed.allowedIds.join(", ")}. ${omitClause}`;
+  return `Configured agent to target: ${allowed.allowedIds.join(", ")}. ${omitClause}${collectClause}`;
+}
+
+/** Check a spawn target against the requester's `requireAgentId` and `allowAgents`. */
+export function resolveRequesterSpawnTargetPolicy(params: {
+  cfg: OpenClawConfig;
+  requesterAgentId: string;
+  targetAgentId: string;
+  requestedAgentId?: string;
+  configuredAgentIds: string[];
+}): { ok: true } | { ok: false; error: string } {
+  const { allowAgents, requireAgentId } = resolveSubagentSpawnTargetConfig(
+    params.cfg,
+    params.requesterAgentId,
+  );
+  if (requireAgentId && !params.requestedAgentId?.trim()) {
+    return {
+      ok: false,
+      error:
+        "sessions_spawn requires explicit agentId when requireAgentId is configured. Provide an allowed configured agentId.",
+    };
+  }
+  const policy = resolveSubagentTargetPolicy({ ...params, allowAgents });
+  return policy.ok ? policy : { ok: false, error: policy.error };
 }
 
 /** Validate one requested target against subagent spawn policy. */

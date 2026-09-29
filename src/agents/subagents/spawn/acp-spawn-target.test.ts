@@ -23,7 +23,7 @@ describe("resolveTargetAcpAgentId", () => {
 describe("describeAcpSpawnTargetParameter", () => {
   it("requires agentId and suggests examples with an empty configuration", () => {
     expect(describeAcpSpawnTargetParameter({ agents: { list: [] } })).toBe(
-      "ACP harness id, for example: codex, claude. agentId is required; no usable acp.defaultAgent is configured.",
+      "ACP harness id, for example: codex, claude. agentId is required.",
     );
   });
 
@@ -50,9 +50,7 @@ describe("describeAcpSpawnTargetParameter", () => {
         agents: { list: [{ id: "main" }] },
         acp: { allowedAgents: ["codex", "claude"], defaultAgent: "gemini" },
       }),
-    ).toBe(
-      "ACP harness id from: claude, codex. agentId is required; no usable acp.defaultAgent is configured.",
-    );
+    ).toBe("ACP harness id from: claude, codex. agentId is required.");
   });
 
   it("does not advertise wildcard access the policy does not grant", () => {
@@ -61,14 +59,52 @@ describe("describeAcpSpawnTargetParameter", () => {
         agents: { list: [] },
         acp: { allowedAgents: ["*"], defaultAgent: "codex" },
       }),
-    ).toBe(
-      "ACP harness id; acp.allowedAgents allows none. agentId is required; no usable acp.defaultAgent is configured.",
-    );
+    ).toBe("No ACP harness id is allowed. agentId is required.");
   });
 
   it("does not offer the implicit main agent when no roster is configured", () => {
     expect(describeAcpSpawnTargetParameter({})).toBe(
-      "ACP harness id, for example: codex, claude. agentId is required; no usable acp.defaultAgent is configured.",
+      "ACP harness id, for example: codex, claude. agentId is required.",
     );
+  });
+
+  describe("for a subagent requester", () => {
+    const acp = { defaultAgent: "codex" };
+    const coder = { id: "coder", runtime: { type: "acp" as const } };
+
+    it("offers no harness when the requester may only target itself", () => {
+      expect(
+        describeAcpSpawnTargetParameter({ agents: { list: [{ id: "main" }, coder] }, acp }, "main"),
+      ).toBe("No ACP harness id is allowed. agentId is required.");
+    });
+
+    it("lists only the harnesses the requester allowlist admits", () => {
+      expect(
+        describeAcpSpawnTargetParameter(
+          {
+            agents: {
+              list: [{ id: "main", subagents: { allowAgents: ["codex"] } }, coder],
+            },
+            acp,
+          },
+          "main",
+        ),
+      ).toBe('ACP harness id from: codex. Omit to use the configured ACP default ("codex").');
+    });
+
+    it("requires agentId when the requester config does", () => {
+      expect(
+        describeAcpSpawnTargetParameter(
+          {
+            agents: {
+              defaults: { subagents: { allowAgents: ["*"], requireAgentId: true } },
+              list: [{ id: "main" }, coder],
+            },
+            acp,
+          },
+          "main",
+        ),
+      ).toBe("ACP harness id from: coder, codex. agentId is required.");
+    });
   });
 });

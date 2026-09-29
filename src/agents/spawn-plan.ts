@@ -22,10 +22,7 @@ import { resolveChildAdmission, type ChildAdmissionCap } from "./child-admission
 import { countActiveRunsForSession } from "./subagents/registry/subagent-registry.js";
 import { resolveSubagentCapabilities } from "./subagents/spawn/subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagents/spawn/subagent-depth.js";
-import {
-  resolveSubagentSpawnTargetConfig,
-  resolveSubagentTargetPolicy,
-} from "./subagents/spawn/subagent-target-policy.js";
+import { resolveRequesterSpawnTargetPolicy } from "./subagents/spawn/subagent-target-policy.js";
 
 type SpawnMode = "run" | "session";
 type SpawnBackendKind = "subagent" | "acp";
@@ -330,26 +327,9 @@ export function resolveSpawnAdmission(params: {
   if (!childAdmission.ok) {
     return childAdmission;
   }
-  const { allowAgents, requireAgentId } = resolveSubagentSpawnTargetConfig(
-    params.cfg,
-    params.requesterAgentId,
-  );
-  if (requireAgentId && !params.requestedAgentId?.trim()) {
-    return {
-      ok: false,
-      error:
-        "sessions_spawn requires explicit agentId when requireAgentId is configured. Provide an allowed configured agentId.",
-    };
-  }
-  const targetPolicy = resolveSubagentTargetPolicy({
-    requesterAgentId: params.requesterAgentId,
-    targetAgentId: params.targetAgentId,
-    requestedAgentId: params.requestedAgentId,
-    allowAgents,
-    configuredAgentIds: params.configuredAgentIds,
-  });
+  const targetPolicy = resolveRequesterSpawnTargetPolicy(params);
   if (!targetPolicy.ok) {
-    return { ok: false, error: targetPolicy.error };
+    return targetPolicy;
   }
   const capabilities = resolveSubagentCapabilities({
     depth: callerDepth + 1,

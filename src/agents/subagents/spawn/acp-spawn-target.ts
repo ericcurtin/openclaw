@@ -9,6 +9,7 @@ import {
 } from "../../../routing/session-key.js";
 import { listAgentEntries, resolveAgentEntry } from "../../agent-scope-config.js";
 import { listAgentIds } from "../../agent-scope.js";
+import { resolveRequesterSpawnTargetPolicy } from "./subagent-target-policy.js";
 
 type ResolvedAcpAgentTarget = {
   ok: true;
@@ -99,25 +100,43 @@ function isExplicitlyAllowedAcpAgent(cfg: OpenClawConfig, agentId: string): bool
   });
 }
 
-/** Describe the sessions_spawn `agentId` parameter for `runtime="acp"`. */
-export function describeAcpSpawnTargetParameter(cfg: OpenClawConfig): string {
+/**
+ * Describe the sessions_spawn `agentId` parameter for `runtime="acp"`.
+ * Pass `subagentRequesterId` when the requester is a subagent: ACP spawns then
+ * also go through its requireAgentId and allowAgents policy.
+ */
+export function describeAcpSpawnTargetParameter(
+  cfg: OpenClawConfig,
+  subagentRequesterId?: string,
+): string {
   // Ask the real admission path so the text never advertises a rejected id.
   const isAccepted = (requestedAgentId?: string) => {
     const target = resolveTargetAcpAgentId({ requestedAgentId, cfg });
-    return target.ok && resolveAcpAgentPolicyError(cfg, target.agentId) === null;
+    return (
+      target.ok &&
+      resolveAcpAgentPolicyError(cfg, target.agentId) === null &&
+      (subagentRequesterId === undefined ||
+        resolveRequesterSpawnTargetPolicy({
+          cfg,
+          requesterAgentId: subagentRequesterId,
+          targetAgentId: target.agentId,
+          requestedAgentId,
+          configuredAgentIds: resolveConfiguredAcpSubagentTargetIds(cfg),
+        }).ok)
+    );
   };
   const defaultAgentId = normalizeOptionalAgentId(cfg.acp?.defaultAgent);
   const omitClause =
     defaultAgentId && isAccepted()
       ? `Omit to use the configured ACP default ("${defaultAgentId}").`
-      : "agentId is required; no usable acp.defaultAgent is configured.";
+      : "agentId is required.";
   const acceptedIds = Array.from(resolveConfiguredAcpHarnessIds(cfg))
     .filter((id) => isAccepted(id))
     .toSorted((a, b) => a.localeCompare(b));
-  if (hasAcpAgentAllowlist(cfg)) {
+  if (hasAcpAgentAllowlist(cfg) || subagentRequesterId !== undefined) {
     return acceptedIds.length > 0
       ? `ACP harness id from: ${acceptedIds.join(", ")}. ${omitClause}`
-      : `ACP harness id; acp.allowedAgents allows none. ${omitClause}`;
+      : `No ACP harness id is allowed. ${omitClause}`;
   }
   const examples = acceptedIds.length > 0 ? acceptedIds.join(", ") : "codex, claude";
   return `ACP harness id, for example: ${examples}. ${omitClause}`;
