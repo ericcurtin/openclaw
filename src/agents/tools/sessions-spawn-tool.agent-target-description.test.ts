@@ -2,6 +2,9 @@
 // resolved target policy (default, explicit allowlist, wildcard) and the
 // separate ACP harness guidance shown when runtime="acp" is available.
 import { afterEach, beforeAll, expect, it } from "vitest";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createSessionsSpawnTool } from "./sessions-spawn-tool.js";
 
 let acpRuntimeRegistry: typeof import("../../acp/runtime/registry.js");
@@ -115,6 +118,33 @@ it("narrows ACP guidance to requester admission for a subagent requester", () =>
     createSessionsSpawnTool({ agentSessionKey: "agent:main:main", config }),
   );
   expect(main).toContain('Omit to use the configured ACP default ("codex")');
+});
+
+it("narrows ACP guidance for an ACP requester stored as a subagent", async () => {
+  registerStubAcpBackend();
+  const config = {
+    acp: { defaultAgent: "codex" },
+    agents: {
+      list: [{ id: "main", subagents: { allowAgents: ["codex"], requireAgentId: true } }],
+    },
+  };
+  const agentSessionKey = "agent:main:acp:child";
+  const describe = () =>
+    requireAgentIdDescription(createSessionsSpawnTool({ agentSessionKey, config }));
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    expect(describe()).toContain('Omit to use the configured ACP default ("codex")');
+    await upsertSessionEntryCore(
+      {
+        agentId: "main",
+        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+        sessionKey: agentSessionKey,
+      },
+      { sessionId: "acp-child", updatedAt: 1, spawnedBy: "agent:main:subagent:parent" },
+    );
+    expect(describe()).toContain(
+      'With runtime="acp": ACP harness id from: codex. agentId is required.',
+    );
+  });
 });
 
 it("names the Swarm collector default agent for collect=true", () => {

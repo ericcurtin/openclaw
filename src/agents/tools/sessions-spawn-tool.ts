@@ -5,7 +5,7 @@ import { resolveThreadBindingSpawnPolicy } from "../../channels/thread-bindings-
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSnakeCaseParamKey } from "../../param-key.js";
-import { isSubagentSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import {
   mergeAcceptedSessionSpawnsForRun,
@@ -24,6 +24,7 @@ import type { SpawnedToolContext } from "../spawned-context.js";
 import { describeAcpSpawnTargetParameter } from "../subagents/spawn/acp-spawn-target.js";
 import { withParentExecutionIdentity } from "../subagents/spawn/execution-identity-spawn-context.js";
 import { resolveAcpSessionsSpawnImageAttachments } from "../subagents/spawn/subagent-attachments.js";
+import { isSubagentEnvelopeSession } from "../subagents/spawn/subagent-capabilities.js";
 import {
   SUBAGENT_SPAWN_CONTEXT_MODES,
   SUBAGENT_SPAWN_MODES,
@@ -373,10 +374,11 @@ export function createSessionsSpawnTool(
     configuredAgentIds: listAgentIds(effectiveConfig),
     collectDefaultAgentId: swarmConfig.enabled ? swarmConfig.defaultAgentId : undefined,
   });
-  // Key shape only: stored ACP envelopes are not read while building the schema.
-  const subagentRequesterId = isSubagentSessionKey(opts?.agentSessionKey)
-    ? (requesterAgentId ?? "")
-    : undefined;
+  // Same classification as ACP spawn admission, so guidance matches what it accepts.
+  const subagentRequesterId =
+    acpAvailable && isSubagentEnvelopeSession(opts?.agentSessionKey, { cfg: effectiveConfig })
+      ? (requesterAgentId ?? "")
+      : undefined;
   const agentIdDescription = acpAvailable
     ? `With runtime="subagent" (default): ${nativeAgentIdDescription} With runtime="acp": ${describeAcpSpawnTargetParameter(effectiveConfig, subagentRequesterId)}`
     : nativeAgentIdDescription;
