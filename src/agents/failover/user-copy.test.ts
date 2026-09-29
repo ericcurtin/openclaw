@@ -133,6 +133,17 @@ describe("failover user copy", () => {
     ).toBe("⚠️ This prompt is longer than the free tier allows for a single request. Shorten it.");
   });
 
+  it("does not double the warning prefix on an already rendered rate-limit message", () => {
+    expect(
+      renderRateLimitReplyCopy({
+        message:
+          "⚠️ This prompt is longer than the free tier allows for a single request. Shorten it.",
+        reason: "rate_limit",
+        attempts: [],
+      }),
+    ).toBe("⚠️ This prompt is longer than the free tier allows for a single request. Shorten it.");
+  });
+
   it("uses neutral billing copy for subscription credentials", () => {
     expect(
       renderBillingReplyCopy({

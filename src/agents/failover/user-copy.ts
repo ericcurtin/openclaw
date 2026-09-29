@@ -85,6 +85,10 @@ export function formatBillingErrorMessage(
 
 const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
 
+function withWarningPrefix(text: string): string {
+  return text.startsWith("⚠️") ? text : `⚠️ ${text}`;
+}
+
 function extractProviderRateLimitMessage(raw: string): string | undefined {
   const withoutPrefix = raw.replace(ERROR_PREFIX_RE, "").trim();
   const info = parseApiErrorInfo(raw) ?? parseApiErrorInfo(withoutPrefix);
@@ -104,7 +108,7 @@ function extractProviderRateLimitMessage(raw: string): string | undefined {
   ) {
     return undefined;
   }
-  return `⚠️ ${trimmed}`;
+  return withWarningPrefix(trimmed);
 }
 
 function renderRateLimitBaseCopy(context: FailoverUserCopyContext): string {
@@ -403,7 +407,7 @@ function extractCodexUsageLimitErrorMessage(
     return undefined;
   }
   const truncated = message.length > 500 ? `${truncateUtf16Safe(message, 497)}...` : message;
-  return truncated.startsWith("⚠️") ? truncated : `⚠️ ${truncated}`;
+  return withWarningPrefix(truncated);
 }
 
 /** Render the reply surface's rate-limit copy, including structured cooldown context. */
@@ -437,7 +441,7 @@ export function renderRateLimitReplyCopy(params: {
         const providerMessage = renderSanitizedUserFacingText(sanitizedMessage, {
           errorContext: true,
         });
-        return providerMessage.startsWith("⚠️") ? providerMessage : `⚠️ ${providerMessage}`;
+        return withWarningPrefix(providerMessage);
       }
       const specificHint = extractProviderRateLimitMessage(sanitizedMessage);
       if (specificHint) {
