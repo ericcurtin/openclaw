@@ -120,7 +120,7 @@ it("narrows ACP guidance to requester admission for a subagent requester", () =>
   expect(main).toContain('Omit to use the configured ACP default ("codex")');
 });
 
-it("narrows ACP guidance for requesters stored as subagents", async () => {
+it("narrows ACP guidance from the prepared requester fact, never a store read", async () => {
   registerStubAcpBackend();
   const config = {
     acp: { defaultAgent: "codex" },
@@ -128,15 +128,16 @@ it("narrows ACP guidance for requesters stored as subagents", async () => {
       list: [{ id: "main", subagents: { allowAgents: ["codex"], requireAgentId: true } }],
     },
   };
-  const describe = (agentSessionKey: string) =>
-    requireAgentIdDescription(createSessionsSpawnTool({ agentSessionKey, config }));
+  const describe = (agentSessionKey: string, requesterIsSubagent?: boolean) =>
+    requireAgentIdDescription(
+      createSessionsSpawnTool({ agentSessionKey, config, requesterIsSubagent }),
+    );
   const storedSubagents = {
     "agent:main:acp:child": { spawnedBy: "agent:main:subagent:parent" },
     "agent:main:dashboard:child": { spawnedBy: "agent:main:subagent:parent", spawnDepth: 1 },
   };
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     for (const [sessionKey, envelope] of Object.entries(storedSubagents)) {
-      expect(describe(sessionKey)).toContain('Omit to use the configured ACP default ("codex")');
       await upsertSessionEntryCore(
         {
           agentId: "main",
@@ -145,7 +146,8 @@ it("narrows ACP guidance for requesters stored as subagents", async () => {
         },
         { sessionId: sessionKey, updatedAt: 1, ...envelope },
       );
-      expect(describe(sessionKey)).toContain(
+      expect(describe(sessionKey)).toContain('Omit to use the configured ACP default ("codex")');
+      expect(describe(sessionKey, true)).toContain(
         'With runtime="acp": ACP harness id from: codex. agentId is required.',
       );
     }

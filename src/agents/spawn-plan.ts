@@ -94,26 +94,18 @@ function resolveRequesterBoundConversationRef(params: {
   if (activeBindings.length === 0) {
     return undefined;
   }
-  if (activeBindings.length === 1) {
-    const conversation = activeBindings[0]?.conversation;
-    return conversation
-      ? {
-          conversationId: conversation.conversationId,
-          ...(conversation.parentConversationId
-            ? { parentConversationId: conversation.parentConversationId }
-            : {}),
-        }
-      : undefined;
-  }
-  if (!params.fallback?.conversationId) {
+  if (activeBindings.length > 1 && !params.fallback?.conversationId) {
     return null;
   }
-  const matched = activeBindings.filter(
-    (record) =>
-      record.conversation.conversationId === params.fallback?.conversationId &&
-      normalizeOptionalString(record.conversation.parentConversationId) ===
-        normalizeOptionalString(params.fallback?.parentConversationId),
-  );
+  const matched =
+    activeBindings.length === 1
+      ? activeBindings
+      : activeBindings.filter(
+          (record) =>
+            record.conversation.conversationId === params.fallback?.conversationId &&
+            normalizeOptionalString(record.conversation.parentConversationId) ===
+              normalizeOptionalString(params.fallback?.parentConversationId),
+        );
   const conversation = matched.length === 1 ? matched[0]?.conversation : undefined;
   return conversation
     ? {
@@ -122,7 +114,9 @@ function resolveRequesterBoundConversationRef(params: {
           ? { parentConversationId: conversation.parentConversationId }
           : {}),
       }
-    : null;
+    : activeBindings.length === 1
+      ? undefined
+      : null;
 }
 
 function buildThreadBindingUnavailableError(kind: SpawnBackendKind, mode: SpawnMode): string {

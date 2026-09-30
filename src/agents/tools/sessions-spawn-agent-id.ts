@@ -2,10 +2,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listAgentIds } from "../agent-scope-config.js";
 import { describeAcpSpawnTargetParameter } from "../subagents/spawn/acp-spawn-target.js";
 import {
-  isSubagentEnvelopeSession,
-  resolveSubagentCapabilityStore,
-} from "../subagents/spawn/subagent-capabilities.js";
-import {
   describeSubagentSpawnTargetParameter,
   resolveSubagentSpawnTargetConfig,
 } from "../subagents/spawn/subagent-target-policy.js";
@@ -14,7 +10,7 @@ import {
 export function describeSessionsSpawnAgentId(params: {
   cfg: OpenClawConfig;
   requesterAgentId?: string;
-  agentSessionKey?: string;
+  requesterIsSubagent: boolean;
   acpAvailable: boolean;
   collectDefaultAgentId?: string;
 }): string {
@@ -28,12 +24,7 @@ export function describeSessionsSpawnAgentId(params: {
   if (!params.acpAvailable) {
     return native;
   }
-  // Same classification as ACP spawn admission, so guidance matches what it accepts.
-  const subagentRequesterId = isSubagentEnvelopeSession(params.agentSessionKey, {
-    cfg: params.cfg,
-    store: resolveSubagentCapabilityStore(params.agentSessionKey, { cfg: params.cfg }),
-  })
-    ? requesterAgentId
-    : undefined;
+  // ACP spawn admission applies subagent target policy only to subagent requesters.
+  const subagentRequesterId = params.requesterIsSubagent ? requesterAgentId : undefined;
   return `With runtime="subagent" (default): ${native} With runtime="acp": ${describeAcpSpawnTargetParameter(params.cfg, subagentRequesterId)}`;
 }

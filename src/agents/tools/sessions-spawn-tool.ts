@@ -5,7 +5,7 @@ import { resolveThreadBindingSpawnPolicy } from "../../channels/thread-bindings-
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSnakeCaseParamKey } from "../../param-key.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { isSubagentSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import {
   mergeAcceptedSessionSpawnsForRun,
@@ -62,6 +62,10 @@ import {
   resolveEffectiveSessionToolsVisibility,
   resolveSandboxedSessionToolContext,
 } from "./sessions-helpers.js";
+import {
+  PlacedSessionsSpawnSchema,
+  PLACED_SESSIONS_SPAWN_DESCRIPTION,
+} from "./sessions-placement-tool-contract.js";
 import { describeSessionsSpawnAgentId } from "./sessions-spawn-agent-id.js";
 import {
   maybeSpawnVisibleSession,
@@ -243,7 +247,9 @@ function createSessionsSpawnToolSchema(params: {
               description: "JSON Schema for the child's structured result; requires collect=true.",
             }),
           ),
-          fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto")])),
+          fastMode: Type.Optional(
+            Type.Union([Type.Boolean(), Type.Literal("auto"), Type.Literal("ultrafast")]),
+          ),
           groupId: Type.Optional(
             Type.String({
               description: "Groups parallel collector children; requires collect=true.",
@@ -304,7 +310,9 @@ function resolveAcpUnavailableMessage(opts?: { sandboxed?: boolean; config?: Ope
   return 'runtime="acp" is unavailable in this session because no ACP runtime backend is loaded. Enable the acpx plugin or use runtime="subagent".';
 }
 
-export function createSessionsSpawnTool(opts?: SessionsSpawnToolOptions): AnyAgentTool {
+export function createSessionsSpawnTool(
+  opts?: SessionsSpawnToolOptions & { workerPlacement?: boolean },
+): AnyAgentTool {
   const effectiveConfig = opts?.config ?? getRuntimeConfig();
   const acpAvailable = isAcpRuntimeSpawnAvailable({
     config: effectiveConfig,
@@ -331,7 +339,7 @@ export function createSessionsSpawnTool(opts?: SessionsSpawnToolOptions): AnyAge
   const agentIdDescription = describeSessionsSpawnAgentId({
     cfg: effectiveConfig,
     requesterAgentId,
-    agentSessionKey: opts?.agentSessionKey,
+    requesterIsSubagent: opts?.requesterIsSubagent ?? isSubagentSessionKey(opts?.agentSessionKey),
     acpAvailable,
     collectDefaultAgentId: swarmConfig.enabled ? swarmConfig.defaultAgentId : undefined,
   });
@@ -348,15 +356,17 @@ export function createSessionsSpawnTool(opts?: SessionsSpawnToolOptions): AnyAge
     displaySummary: acpAvailable
       ? SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY
       : SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY,
-    description: describeSessionsSpawnTool({
-      acpAvailable,
-      threadAvailable,
-      subagentThreadAvailable: threadAvailability.subagent,
-      swarmEnabled: swarmConfig.enabled,
-      sessionToolsVisibility,
-      spawnRestricted: restrictToSpawned,
-    }),
-    parameters,
+    description: opts?.workerPlacement
+      ? PLACED_SESSIONS_SPAWN_DESCRIPTION
+      : describeSessionsSpawnTool({
+          acpAvailable,
+          threadAvailable,
+          subagentThreadAvailable: threadAvailability.subagent,
+          swarmEnabled: swarmConfig.enabled,
+          sessionToolsVisibility,
+          spawnRestricted: restrictToSpawned,
+        }),
+    parameters: opts?.workerPlacement ? PlacedSessionsSpawnSchema : parameters,
     execute: wrapGatewayPersonalToolExecution(async (_toolCallId, args, signal) =>
       withToolEffectBoundary(async (onSpawnEffectsStart) => {
         const operatorSelection = resolveGatewayToolOperatorSelection();
@@ -617,7 +627,10 @@ export function createSessionsSpawnTool(opts?: SessionsSpawnToolOptions): AnyAge
                 ? (params.outputSchema as Record<string, unknown>)
                 : undefined,
             fastMode:
-              params.fastMode === true || params.fastMode === false || params.fastMode === "auto"
+              params.fastMode === true ||
+              params.fastMode === false ||
+              params.fastMode === "auto" ||
+              params.fastMode === "ultrafast"
                 ? params.fastMode
                 : undefined,
             groupId: readToolStringParam(params, "groupId"),
