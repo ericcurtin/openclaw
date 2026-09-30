@@ -1,4 +1,5 @@
-// Covers the sessions_spawn agentId schema description for the requester's
+// Covers the sessions_spawn agentId guidance in the tool description (it survives
+// Codex schema compaction, unlike property descriptions) for the requester's
 // resolved target policy (default, explicit allowlist, wildcard) and the
 // separate ACP harness guidance shown when runtime="acp" is available.
 import { afterEach, beforeAll, expect, it } from "vitest";
@@ -18,10 +19,9 @@ afterEach(() => {
 });
 
 function requireAgentIdDescription(tool: ReturnType<typeof createSessionsSpawnTool>): string {
-  const schema = tool.parameters as { properties: Record<string, { description?: string }> };
-  const description = schema.properties.agentId?.description;
+  const description = tool.description;
   if (!description) {
-    throw new Error("expected agentId schema property with a description");
+    throw new Error("expected a sessions_spawn tool description");
   }
   return description;
 }
@@ -31,6 +31,10 @@ it("describes the requester-only default target", () => {
   const description = requireAgentIdDescription(tool);
   expect(description).toContain("Only the requester agent is allowed");
   expect(description).toContain('Omit to keep the requester agent ("main")');
+  // Codex strips schema descriptions once a tool schema passes 5,000 bytes, and
+  // sessions_spawn is already over it; the guidance must not ride on the schema.
+  const schema = tool.parameters as { properties: Record<string, object> };
+  expect(schema.properties.agentId).not.toHaveProperty("description");
 });
 
 it("describes an explicit allowlist target", () => {

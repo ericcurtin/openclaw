@@ -129,6 +129,8 @@ export function describeSessionsSpawnTool(options?: {
   swarmEnabled?: boolean;
   sessionToolsVisibility?: SessionVisibilityScope;
   spawnRestricted?: boolean;
+  /** Requester-specific target guidance; tool descriptions survive Codex schema compaction. */
+  agentIdGuidance?: string;
 }): string {
   // Callers that resolve the effective visibility get it rendered as fact;
   // without it the copy must keep the "default" hedge instead of asserting the effective scope.
@@ -139,12 +141,16 @@ export function describeSessionsSpawnTool(options?: {
     options?.acpAvailable === false
       ? 'Spawn child session; default `runtime="subagent"`.'
       : 'Spawn child session; default `runtime="subagent"`; ACP needs explicit `runtime="acp"`.';
+  // Keep the base sentence verbatim: the agents_list availability rewrite matches it.
+  const agentIdTargets = options?.agentIdGuidance
+    ? ` \`agentId\` targets: ${options.agentIdGuidance}`
+    : "";
   return [
     runtimeDescription,
     options?.threadAvailable
       ? '`mode="run"` one-shot; `mode="session"` persistent/thread-bound only on supporting requester channel.'
       : '`mode="run"` one-shot background.',
-    "`agentId` targets a configured agent; `model` overrides its model; `cleanup` delete|keep hidden child session; `sandbox` inherit|require.",
+    `\`agentId\` targets a configured agent; \`model\` overrides its model; \`cleanup\` delete|keep hidden child session; \`sandbox\` inherit|require.${agentIdTargets}`,
     "Default to a hidden subagent for internal QA, research, coding, review, tests, and parallel work supporting the current task. This includes substantial, bounded API/service investigations that can be handed off with the needed context and capabilities. Omit `visible` or set it false, and report results through the parent.",
     '`visible=true`: durable visible session. Use only when the user requests a separate session or needs to revisit and steer the work independently. Shows in web UI sidebar; works without UI: announcing runs report back, progress checkable. `group` places it in a custom sidebar group (a new name creates the group); omission or an empty string leaves it ungrouped. Subagent only; omit `mode` (`mode="run"` is also accepted), `thread`, `thinking`, and `lightContext`; `attachments=[]` and omitted/blank `attachAs.mountPath` are accepted, but nonempty attachment staging is unsupported; inherits the caller tool-policy ceiling; select a registered project with `projectId` or a managed GitHub clone with `projectGitUrl` (mutually exclusive with each other and `cwd`); may check out a git worktree via `worktree`/`worktreeName`/`worktreeBaseRef`. When its accepted result includes `sessionUrl`, channel acknowledgements put the session URL on the first line and `Owner: <label>` on the second line.',
     'Omit `placement` or use `{kind:"local"}` for local execution. `{kind:"profile",profileId,os?,machineClass?}` selects a configured cloud profile and requires `visible=true` and `worktree=true`. Cloud placement creates first, dispatches, then starts the task; failures retain the child for inspection, never fall back locally.',

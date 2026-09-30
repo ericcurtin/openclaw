@@ -151,7 +151,6 @@ function createSessionsSpawnToolSchema(params: {
   threadAvailable: boolean;
   subagentThreadAvailable: boolean;
   swarmEnabled: boolean;
-  agentIdDescription: string;
 }) {
   const spawnModes = params.threadAvailable ? SUBAGENT_SPAWN_MODES : (["run"] as const);
   const schema = {
@@ -177,7 +176,7 @@ function createSessionsSpawnToolSchema(params: {
       params.acpAvailable ? SESSIONS_SPAWN_RUNTIMES : (["subagent"] as const),
       { description: 'Runtime; visible=true requires "subagent".' },
     ),
-    agentId: Type.Optional(Type.String({ description: params.agentIdDescription })),
+    agentId: Type.Optional(Type.String()),
     model: Type.Optional(Type.String()),
     runTimeoutSeconds: Type.Optional(
       Type.Integer({
@@ -336,7 +335,7 @@ export function createSessionsSpawnTool(
     requesterAgentId,
     sandboxed: opts?.sandboxed,
   });
-  const agentIdDescription = describeSessionsSpawnAgentId({
+  const agentIdGuidance = describeSessionsSpawnAgentId({
     cfg: effectiveConfig,
     requesterAgentId,
     requesterIsSubagent: opts?.requesterIsSubagent ?? isSubagentSessionKey(opts?.agentSessionKey),
@@ -348,7 +347,6 @@ export function createSessionsSpawnTool(
     threadAvailable,
     subagentThreadAvailable: threadAvailability.subagent,
     swarmEnabled: swarmConfig.enabled,
-    agentIdDescription,
   });
   const tool: AnyAgentTool = {
     label: "Sessions",
@@ -365,6 +363,7 @@ export function createSessionsSpawnTool(
           swarmEnabled: swarmConfig.enabled,
           sessionToolsVisibility,
           spawnRestricted: restrictToSpawned,
+          agentIdGuidance,
         }),
     parameters: opts?.workerPlacement ? PlacedSessionsSpawnSchema : parameters,
     execute: wrapGatewayPersonalToolExecution(async (_toolCallId, args, signal) =>
