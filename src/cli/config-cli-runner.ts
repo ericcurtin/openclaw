@@ -56,6 +56,7 @@ import {
   type ConfigSetDryRunResult,
 } from "./config-set-dryrun.js";
 import type { ConfigSetCurrentExpectation } from "./config-set-input.js";
+import { formatCliJsonFailure } from "./failure-output.js";
 import { exitCliAfterOutput } from "./one-shot-exit.js";
 
 const GATEWAY_AUTH_MODE_PATH: PathSegment[] = ["gateway", "auth", "mode"];
@@ -260,24 +261,6 @@ function configApplyHintForOperations(
     : "No gateway restart needed.";
 }
 
-function assertConfigSetCurrentExpectation(params: {
-  authoredConfig: OpenClawConfig;
-  operation: ConfigSetOperation;
-  expectation: ConfigSetCurrentExpectation;
-}): void {
-  const current = getAtPath(params.authoredConfig, params.operation.setPath);
-  const matches =
-    params.expectation.kind === "absent"
-      ? !current.found
-      : current.found && isDeepStrictEqual(current.value, params.expectation.value);
-  if (!matches) {
-    throw new ConfigMutationConflictError(
-      "conditional config set expectation did not match the authored config",
-      { retryable: false },
-    );
-  }
-}
-
 export async function runConfigOperations(params: {
   runtime: RuntimeEnv;
   operations: ConfigSetOperation[];
@@ -308,11 +291,17 @@ export async function runConfigOperations(params: {
       throw new Error("conditional config set requires one resolved operation");
     }
     assertCurrentExpectation = () => {
-      assertConfigSetCurrentExpectation({
-        authoredConfig: snapshot.resolved,
-        operation: expectationOperation,
-        expectation: currentExpectation,
-      });
+      const current = getAtPath(snapshot.resolved, expectationOperation.setPath);
+      const matches =
+        currentExpectation.kind === "absent"
+          ? !current.found
+          : current.found && isDeepStrictEqual(current.value, currentExpectation.value);
+      if (!matches) {
+        throw new ConfigMutationConflictError(
+          "conditional config set expectation did not match the authored config",
+          { retryable: false },
+        );
+      }
     };
   }
   // Mutate resolved config so runtime defaults never leak into the authored file.
@@ -577,6 +566,7 @@ export function handleConfigMutationError(params: {
   err: unknown;
   runtime: RuntimeEnv;
   options: ConfigMutationOptions;
+  jsonOutput: boolean;
 }) {
   if (params.err instanceof ExitError) {
     throw params.err;
@@ -607,6 +597,9 @@ export function handleConfigMutationError(params: {
     writeRuntimeJson(params.runtime, result);
     params.runtime.error(danger(message));
     exitCliAfterOutput(params.runtime, 1);
+  }
+  if (params.jsonOutput) {
+    writeRuntimeJson(params.runtime, formatCliJsonFailure(message));
   }
   if (isConfigValidationFailedError(params.err)) {
     params.runtime.error("Config change declined. No settings were saved.");

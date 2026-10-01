@@ -137,6 +137,7 @@ public struct OpenClawChatView: View {
     @Environment(\.openClawChatWindowCommands) private var windowCommands
     #endif
     @State private var fullMessageRequest: ChatFullMessageReaderRequest?
+    @State private var reactionPickerMessage: OpenClawChatMessage?
     #if os(iOS)
     @State private var selectTextMessage: OpenClawChatMessage?
     #endif
@@ -275,6 +276,9 @@ public struct OpenClawChatView: View {
         .onChange(of: self.turnRecapObservation, initial: true) { _, observation in
             self.updateTurnRecap(observation)
         }
+        .sheet(item: self.$reactionPickerMessage) {
+            ChatMessageReactionPicker(viewModel: self.viewModel, message: $0)
+        }
         .sheet(item: self.$fullMessageRequest) { request in
             ChatFullMessageReader(
                 request: request,
@@ -374,9 +378,6 @@ extension OpenClawChatView {
             style: self.style,
             showsSessionSwitcher: self.showsSessionSwitcher,
             userAccent: self.userAccent,
-            assistantName: self.assistantName,
-            assistantAvatarText: self.assistantAvatarText,
-            assistantAvatarTint: self.assistantAvatarTint,
             composerChrome: self.composerChrome,
             isComposerEnabled: self.isComposerEnabled
                 && !self.viewModel.isSendingAttachmentDraft,
@@ -579,9 +580,7 @@ extension OpenClawChatView {
             transcript.rows,
             tools: self.displayOptions.contains(.toolActivity) ? self.viewModel.toolActivities : [],
             liveRunID: liveRunIDs.count == 1 ? liveRunIDs.first : nil,
-            hasLiveContent: self.showsWorkingIndicator || self.hasVisibleStreamingAssistantText ||
-                (self.displayOptions.contains(.toolActivity) &&
-                    !self.viewModel.subagentActivities.isEmpty),
+            hasLiveContent: self.showsWorkingIndicator || self.hasVisibleStreamingAssistantText,
             searchActive: self.isSearchPresented)
         ForEach(groups) { group in
             if group.runID != nil {
@@ -635,7 +634,8 @@ extension OpenClawChatView {
                 answerID: answerID)
                 .id(row.id)
         case let .tool(tool):
-            ChatPendingToolsBubble(toolCalls: [tool])
+            ChatToolActivityList(items: [ChatToolActivityItem(live: tool)])
+                .padding(4)
         }
     }
 
@@ -694,26 +694,19 @@ extension OpenClawChatView {
                 .equatable()
         }
 
-        if self.displayOptions.contains(.toolActivity), !self.viewModel.subagentActivities.isEmpty {
-            ChatSubagentActivityList(
-                activities: self.viewModel.subagentActivities,
-                hiddenWorkingCount: self.viewModel.hiddenWorkingSubagentCount)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-
         if let text = viewModel.streamingAssistantText {
             let preparedText = ChatStreamingAssistantText(
                 sourceText: text,
                 includesThinking: self.displayOptions.contains(.reasoning))
             if !preparedText.segments.isEmpty {
-                EquatableChatStreamingAssistantBubble(bubble: ChatStreamingAssistantBubble(
+                ChatStreamingAssistantBubble(
                     text: preparedText,
                     markdownVariant: self.markdownVariant,
                     assistantName: self.assistantName,
                     assistantAvatarText: self.assistantAvatarText,
                     assistantAvatarTint: self.assistantAvatarTint,
                     showsAssistantAvatar: self.showsAssistantAvatars,
-                    isClean: self.composerChrome == .clean))
+                    isClean: self.composerChrome == .clean)
                     .equatable()
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -777,6 +770,7 @@ extension OpenClawChatView {
                 alignment: isUser ? .trailing : .leading)
         let row = VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
             bubble
+            ChatMessageReactions(viewModel: self.viewModel, message: msg)
             if let outboxState = self.viewModel.outboxState(for: msg.id) {
                 ChatOutboxStatusLabel(state: outboxState)
                     .padding(.trailing, 8)
@@ -835,15 +829,7 @@ extension OpenClawChatView {
                 self.hoveredMessageID = nil
             }
         }
-        #if os(iOS)
-        if isUser || !showsActions {
-            row.contextMenu { self.messageMenuActions(for: msg) }
-        } else {
-            row
-        }
-        #else
         row.contextMenu { self.messageMenuActions(for: msg) }
-        #endif
     }
 
     private func messageActionsMenu(for message: OpenClawChatMessage) -> some View {
@@ -858,6 +844,9 @@ extension OpenClawChatView {
 
     @ViewBuilder
     private func messageMenuActions(for message: OpenClawChatMessage) -> some View {
+        ChatMessageReactionAction(viewModel: self.viewModel, message: message) {
+            self.reactionPickerMessage = message
+        }
         self.copyMessageButton(for: message)
         #if os(iOS)
         self.selectTextButton(for: message)
@@ -1083,7 +1072,6 @@ extension OpenClawChatView {
 
     private var hasVisibleTransientContent: Bool {
         self.viewModel.hasBlockingRunActivity ||
-            (self.displayOptions.contains(.toolActivity) && !self.viewModel.subagentActivities.isEmpty) ||
             (self.displayOptions.contains(.toolActivity) && !self.viewModel.pendingToolCalls.isEmpty) ||
             self.hasVisibleStreamingAssistantText ||
             !self.viewModel.visibleQuestionCards.isEmpty
@@ -1135,7 +1123,6 @@ extension OpenClawChatView {
         self.viewModel.messages.isEmpty &&
             !self.hasVisibleStreamingAssistantText &&
             !self.viewModel.hasBlockingRunActivity &&
-            self.viewModel.subagentActivities.isEmpty &&
             self.viewModel.pendingToolCalls.isEmpty
     }
 
@@ -1200,7 +1187,6 @@ extension OpenClawChatView {
         guard self.searchMessageID == nil else { return }
         if self.viewModel.messages.isEmpty,
            !self.viewModel.hasBlockingRunActivity,
-           self.viewModel.subagentActivities.isEmpty,
            self.viewModel.pendingToolCalls.isEmpty,
            self.viewModel.streamingAssistantText == nil
         {
@@ -1287,11 +1273,6 @@ extension OpenClawChatView {
         #endif
     }
 
-    private func isToolResultMessage(_ message: OpenClawChatMessage) -> Bool {
-        let role = message.role.lowercased()
-        return role == "toolresult" || role == "tool_result"
-    }
-
     private func shouldDisplayMessage(_ message: OpenClawChatMessage) -> Bool {
         let primaryText = ChatMessageVisibleText.displayText(
             in: message,
@@ -1300,7 +1281,7 @@ extension OpenClawChatView {
             return true
         }
 
-        if self.isToolResultMessage(message) {
+        if message.isToolResult {
             return self.displayOptions.contains(.toolActivity)
         }
 

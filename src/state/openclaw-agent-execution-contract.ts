@@ -16,7 +16,12 @@ import type {
   PublishedSessionTranscriptArchive,
   SessionLegacyArchiveRemovalResult,
 } from "../config/sessions/session-history-archive-pruning.types.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { SessionPendingInputWithdrawal } from "../config/sessions/session-pending-input-withdrawal.worker.js";
+import type {
+  SessionReactionWrite,
+  SetSessionReactionParams,
+} from "../config/sessions/session-reaction-store.types.js";
+import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
 import type { SqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import type {
   SqliteWalPeriodicRequest,
@@ -45,6 +50,13 @@ export type AgentDatabaseExecutionFileIdentity = Pick<
   AgentDatabaseExecutionIdentity,
   "kind" | "physicalIdentity" | "birthtime" | "nativeLocation"
 >;
+
+/** A borrowed native generation, never a file locator that can adopt a later open. */
+export type AgentDatabaseGenerationClaim = {
+  readonly identity: string;
+  readonly incarnation: string;
+  assertCurrent(): void;
+};
 
 export type AgentDatabaseExecutionOpen = {
   leaseId: string;
@@ -76,7 +88,7 @@ export type AgentDatabaseOperations = AgentDatabaseDomainOperations & {
     output: SessionTranscriptInitializationPublication;
   };
   "database.prepareWrite": { input: undefined; output: void };
-  "session.entry.read": { input: { sessionKey: string }; output: SessionEntry | undefined };
+  "session.entry.read": { input: { sessionKey: string }; output: InternalSessionEntry | undefined };
   "session.entry.acp": {
     input: AcpSessionEntryMutationInput;
     output: AcpSessionEntryMutationResult;
@@ -90,6 +102,14 @@ export type AgentDatabaseOperations = AgentDatabaseDomainOperations & {
   "session.providerReview.compare": {
     input: SessionProviderReviewComparison;
     output: SessionEntry;
+  };
+  "session.reaction.set": {
+    input: { sessionKey: string; params: SetSessionReactionParams };
+    output: SessionReactionWrite;
+  };
+  "session.pendingInputs.withdraw": {
+    input: SessionPendingInputWithdrawal;
+    output: boolean;
   };
   "session.archivePruning.deletePublished": {
     input: PublishedSessionTranscriptArchive;

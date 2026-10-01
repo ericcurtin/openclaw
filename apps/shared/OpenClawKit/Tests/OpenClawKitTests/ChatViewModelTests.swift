@@ -126,33 +126,6 @@ private func usageEvent(runId: String, outputTokens: Int, seq: Int) -> OpenClawA
         data: ["outputTokens": AnyCodable(outputTokens)])
 }
 
-private func subagentTaskSummary(
-    id: String,
-    status: String,
-    sessionKey: String = "agent:main:main",
-    lastActivity: String? = nil,
-    progressSummary: String? = nil,
-    terminalSummary: String? = nil,
-    diffStat: [String: AnyCodable]? = nil,
-    startedAt: Double = 1000,
-    endedAt: Double? = nil) -> TaskSummary
-{
-    TaskSummary(
-        id: id,
-        runtime: "subagent",
-        status: AnyCodable(status),
-        agentid: "main",
-        sessionkey: sessionKey,
-        childsessionkey: "agent:main:subagent:\(id)",
-        updatedat: AnyCodable(endedAt ?? startedAt),
-        startedat: AnyCodable(startedAt),
-        endedat: endedAt.map(AnyCodable.init),
-        lastactivity: lastActivity,
-        diffstat: diffStat,
-        progresssummary: progressSummary,
-        terminalsummary: terminalSummary)
-}
-
 private func lifecycleSessionEntry(
     key: String,
     updatedAt: Double,
@@ -404,7 +377,7 @@ private func makeViewModel(
     waitForRunCompletionHook: (@Sendable (String, Int) async -> OpenClawChatRunObservation)? = nil,
     acquireSessionSettingsRouteLeaseHook: (@Sendable () async -> Void)? = nil,
     swarmEnabledHook: (@Sendable (String) async throws -> Bool)? = nil,
-    listChildSessionsHook: (@Sendable (String) async throws -> [OpenClawChatSessionEntry])? = nil,
+    listChildSessionsHook: (@Sendable (String) async throws -> OpenClawChatChildSessionsResult)? = nil,
     listQuestionsHook: (@Sendable () async throws -> [QuestionRecord])? = nil,
     healthResponses: [Bool] = [true],
     initialThinkingLevel: String? = nil,
@@ -809,9 +782,8 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         (@Sendable (String, Int) async -> OpenClawChatRunObservation)?
     private let acquireSessionSettingsRouteLeaseHook: (@Sendable () async -> Void)?
     private let swarmEnabledHook: (@Sendable (String) async throws -> Bool)?
-    private let listChildSessionsHook: (@Sendable (String) async throws -> [OpenClawChatSessionEntry])?
+    private let listChildSessionsHook: (@Sendable (String) async throws -> OpenClawChatChildSessionsResult)?
     private let listQuestionsHook: (@Sendable () async throws -> [QuestionRecord])?
-    private let listTasksHook: (@Sendable (String, String?) async throws -> [TaskSummary])?
     private let getQuestionHook: (@Sendable (String) async throws -> QuestionRecord)?
     private let resolveQuestionHook: (@Sendable (String, [String: [String]], [String]?) async throws
         -> QuestionAnswers)?
@@ -855,9 +827,8 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         waitForRunCompletionHook: (@Sendable (String, Int) async -> OpenClawChatRunObservation)? = nil,
         acquireSessionSettingsRouteLeaseHook: (@Sendable () async -> Void)? = nil,
         swarmEnabledHook: (@Sendable (String) async throws -> Bool)? = nil,
-        listChildSessionsHook: (@Sendable (String) async throws -> [OpenClawChatSessionEntry])? = nil,
+        listChildSessionsHook: (@Sendable (String) async throws -> OpenClawChatChildSessionsResult)? = nil,
         listQuestionsHook: (@Sendable () async throws -> [QuestionRecord])? = nil,
-        listTasksHook: (@Sendable (String, String?) async throws -> [TaskSummary])? = nil,
         getQuestionHook: (@Sendable (String) async throws -> QuestionRecord)? = nil,
         resolveQuestionHook: (@Sendable (String, [String: [String]], [String]?) async throws -> QuestionAnswers)? = nil,
         cancelQuestionHook: (@Sendable (String) async throws -> Void)? = nil,
@@ -895,7 +866,6 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         self.swarmEnabledHook = swarmEnabledHook
         self.listChildSessionsHook = listChildSessionsHook
         self.listQuestionsHook = listQuestionsHook
-        self.listTasksHook = listTasksHook
         self.getQuestionHook = getQuestionHook
         self.resolveQuestionHook = resolveQuestionHook
         self.cancelQuestionHook = cancelQuestionHook
@@ -1040,8 +1010,8 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         try await self.swarmEnabledHook?(sessionKey) ?? false
     }
 
-    func listChildSessions(parentKey: String) async throws -> [OpenClawChatSessionEntry] {
-        try await self.listChildSessionsHook?(parentKey) ?? []
+    func listChildSessions(parentKey: String) async throws -> OpenClawChatChildSessionsResult {
+        try await self.listChildSessionsHook?(parentKey) ?? OpenClawChatChildSessionsResult(rows: [], isComplete: true)
     }
 
     func listSessions(
@@ -1266,10 +1236,6 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
 
     func listQuestions() async throws -> [QuestionRecord] {
         try await self.listQuestionsHook?() ?? []
-    }
-
-    func listTasks(sessionKey: String, agentID: String?) async throws -> [TaskSummary] {
-        try await self.listTasksHook?(sessionKey, agentID) ?? []
     }
 
     func getQuestion(id: String) async throws -> QuestionRecord {
@@ -1703,9 +1669,19 @@ struct ChatViewModelTests {
 
     @Test(arguments: [false, true])
     func `route replacement invalidates a stale known-absent capability`(sequenceGap: Bool) async throws {
+        let capabilityPhase = AsyncCounter()
+        let capabilityGate = SessionSubscribeGate()
         let (_, vm) = await makeViewModel(
             historyResponses: [historyPayload(canonicalKey: "agent:main:main", agentId: "main")],
-            progressCardStoreAvailable: false)
+            advertisedMethodHook: { method in
+                guard method == "progressCard.get" else { return nil }
+                switch await capabilityPhase.current() {
+                case 0: return false
+                case 1: await capabilityGate.wait()
+                default: break
+                }
+                return true
+            })
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
         try await waitUntil("progress card capability resolves unavailable") {
             await MainActor.run { vm.progressCardStoreAvailable == false }
@@ -1718,7 +1694,10 @@ struct ChatViewModelTests {
 
         // A replacement route may be a different Gateway; the stale known-absent
         // value must not authorize the legacy path against a dual-emitting one.
+        // Hold its capability reply until the unknown-capability assertions finish.
+        _ = await capabilityPhase.increment()
         await MainActor.run { vm.handleTransportEvent(sequenceGap ? .seqGap : .routeChanged) }
+        await capabilityGate.waitUntilBlocked()
         #expect(await MainActor.run { vm.progressCardStoreAvailable } == nil)
 
         await MainActor.run {
@@ -1727,6 +1706,8 @@ struct ChatViewModelTests {
         }
         #expect(await MainActor.run { vm.progressCard?.steps?.first?.step } ==
             (sequenceGap ? "Old gateway step" : nil))
+        _ = await capabilityPhase.increment()
+        await capabilityGate.release()
     }
 
     @Test func `legacy plan is ignored when progress card store is available`() async throws {
@@ -2382,74 +2363,6 @@ struct ChatViewModelTests {
         #expect(await fetchedSessions.current() == ["agent:main:main"])
     }
 
-    @Test func `bootstrap fills subagent activity from the current session task list`() async throws {
-        let transport = TestChatTransport(
-            historyResponses: [historyPayload()],
-            listTasksHook: { sessionKey, agentID in
-                guard sessionKey == "main", agentID == "main" else { return [] }
-                return [subagentTaskSummary(
-                    id: "listed",
-                    status: "running",
-                    progressSummary: "Restored from task list")]
-            })
-        let viewModel = await MainActor.run {
-            OpenClawChatViewModel(
-                sessionKey: "main",
-                transport: transport,
-                activeAgentId: "main")
-        }
-
-        await MainActor.run { viewModel.load() }
-        try await waitUntil("listed subagent activity") {
-            await MainActor.run { viewModel.subagentActivities.map(\.id) == ["listed"] }
-        }
-
-        #expect(await MainActor.run { viewModel.subagentActivities.first?.snippet } ==
-            "Restored from task list")
-    }
-
-    @Test @MainActor func `subagent task events filter by session and retain terminal activity`() {
-        let viewModel = OpenClawChatViewModel(
-            sessionKey: "main",
-            transport: TestChatTransport(historyResponses: []),
-            activeAgentId: "main")
-        let liveDiff = [
-            "files": AnyCodable(2),
-            "added": AnyCodable(9),
-            "removed": AnyCodable(3),
-        ]
-
-        viewModel.handleTransportEvent(.task(.upserted(subagentTaskSummary(
-            id: "foreign",
-            status: "running",
-            sessionKey: "agent:main:other",
-            lastActivity: "Must stay hidden"))))
-        viewModel.handleTransportEvent(.task(.upserted(subagentTaskSummary(
-            id: "owned",
-            status: "running",
-            lastActivity: "Editing shared chat",
-            diffStat: liveDiff))))
-
-        #expect(viewModel.subagentActivities.map(\.id) == ["owned"])
-        #expect(viewModel.subagentActivities[0].snippet == "Editing shared chat")
-        #expect(viewModel.subagentActivities[0].diffStat == ChatToolDiffStat(
-            files: 2,
-            added: 9,
-            removed: 3))
-
-        viewModel.handleTransportEvent(.task(.upserted(subagentTaskSummary(
-            id: "owned",
-            status: "completed",
-            progressSummary: "Older milestone",
-            terminalSummary: "Finished cleanly",
-            endedAt: Date().timeIntervalSince1970 * 1000))))
-
-        #expect(viewModel.subagentActivities[0].status == .completed)
-        #expect(viewModel.subagentActivities[0].snippet == "Editing shared chat")
-        #expect(viewModel.subagentActivities[0].terminalSummary == "Finished cleanly")
-        #expect(viewModel.subagentActivities[0].diffStat?.added == 9)
-    }
-
     @Test @MainActor func `tool input delta updates the matching pending edit diff`() {
         let viewModel = OpenClawChatViewModel(
             sessionKey: "main",
@@ -2496,7 +2409,7 @@ struct ChatViewModelTests {
         let transport = TestChatTransport(
             historyResponses: [],
             swarmEnabledHook: { _ in try await script.next() },
-            listChildSessionsHook: { _ in [swarmChild] })
+            listChildSessionsHook: { _ in OpenClawChatChildSessionsResult(rows: [swarmChild], isComplete: true) })
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
 
         await viewModel.refreshSwarmCapability()
@@ -2522,7 +2435,7 @@ struct ChatViewModelTests {
         let transport = TestChatTransport(
             historyResponses: [],
             swarmEnabledHook: { _ in try await script.next() },
-            listChildSessionsHook: { _ in [swarmChild] })
+            listChildSessionsHook: { _ in OpenClawChatChildSessionsResult(rows: [swarmChild], isComplete: true) })
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
 
         await viewModel.refreshSwarmCapability()
@@ -2562,7 +2475,7 @@ struct ChatViewModelTests {
         #expect(!viewModel.swarmEnabled)
     }
 
-    @Test @MainActor func `fresh Swarm lease rechecks capability before paging`() async {
+    @Test @MainActor func `Swarm preserves partial children and rechecks capability before paging`() async {
         let script = SwarmCapabilityScript([.value(true), .value(false)])
         var child = sessionEntry(key: "agent:main:child", updatedAt: 1)
         child.parentSessionKey = "main"
@@ -2572,12 +2485,13 @@ struct ChatViewModelTests {
         let transport = TestChatTransport(
             historyResponses: [],
             swarmEnabledHook: { _ in try await script.next() },
-            listChildSessionsHook: { _ in [swarmChild] })
+            listChildSessionsHook: { _ in OpenClawChatChildSessionsResult(rows: [swarmChild], isComplete: false) })
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
 
         await viewModel.refreshSwarmCapability()
         #expect(viewModel.swarmEnabled)
-        #expect(!viewModel.swarmSessions.isEmpty)
+        #expect(viewModel.swarmSessions.map(\.key) == ["agent:main:child"])
+        #expect(viewModel.activeSwarmGroups.first?.running == 1)
 
         await viewModel.refreshSwarmCapability()
         #expect(!viewModel.swarmEnabled)
@@ -2594,7 +2508,7 @@ struct ChatViewModelTests {
         let transport = TestChatTransport(
             historyResponses: [],
             swarmEnabledHook: { _ in try await script.next() },
-            listChildSessionsHook: { _ in [swarmChild] })
+            listChildSessionsHook: { _ in OpenClawChatChildSessionsResult(rows: [swarmChild], isComplete: true) })
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
 
         await viewModel.refreshSwarmCapability()

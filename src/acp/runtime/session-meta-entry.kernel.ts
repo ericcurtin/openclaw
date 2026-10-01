@@ -9,12 +9,20 @@ export type AcpSessionEntryExpectation = Pick<
   "sessionId" | "lifecycleRevision" | "sessionStartedAt"
 > | null;
 
+export function captureAcpSessionEntryBinding({
+  sessionId,
+  lifecycleRevision,
+  sessionStartedAt,
+}: NonNullable<AcpSessionEntryExpectation>): NonNullable<AcpSessionEntryExpectation> {
+  return { sessionId, lifecycleRevision, sessionStartedAt };
+}
+
 /** A fresh row may change metadata, but cannot replace the lifecycle or cleanup target. */
 export function assertAcpSessionMutationEntry(
   entry: SessionEntry | undefined,
   expected: AcpSessionEntryExpectation,
   control: AcpSessionControlBinding | undefined,
-  phase: "entry mutation" | "metadata preparation" | "legacy source consumption",
+  phase: "entry mutation" | "metadata preparation" | "legacy source consumption" | "control read",
 ): void {
   const matches =
     expected === null
