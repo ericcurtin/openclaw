@@ -258,7 +258,7 @@ function createSessionsSpawnToolSchema(params: {
         Type.Object({
           name: Type.String(),
           content: Type.String(),
-          encoding: Type.Optional(optionalStringEnum(["utf8", "base64"] as const)),
+          encoding: optionalStringEnum(["utf8", "base64"] as const),
           mimeType: Type.Optional(Type.String()),
         }),
         {
@@ -536,12 +536,7 @@ export function createSessionsSpawnTool(
         }
         const thread = params.thread === true;
         const attachments = Array.isArray(params.attachments)
-          ? (params.attachments as Array<{
-              name: string;
-              content: string;
-              encoding?: "utf8" | "base64";
-              mimeType?: string;
-            }>)
+          ? (params.attachments as Parameters<typeof spawnSubagentDirect>[0]["attachments"])
           : undefined;
         const parentExecutionIdentityToken = getGatewayToolCallerIdentity()?.executionIdentityToken;
         const spawnParams = {
