@@ -37,6 +37,7 @@ import type {
   CronRunRecoveryReadCommand,
   CronRunRecoveryObservation,
 } from "../cron/store/run-recovery-read.types.js";
+import type { CronQuarantinedJob } from "../cron/types-shared.js";
 import type { FleetCellRecord } from "../fleet/registry.types.js";
 import type {
   ListTerminalOperatorApprovalsInput,
@@ -97,6 +98,7 @@ import type {
   AgentDeletionJournalPurpose,
   AgentDeletionJournalStatus,
 } from "./agent-deletion-journal.types.js";
+import type { BackupRunRecord } from "./backup-run-records.contract.js";
 import type {
   SharedGitHubPublicationReadInput,
   GitHubPublicationReceiptTarget,
@@ -141,6 +143,7 @@ export type OpenClawStateReadAuthority = {
 };
 
 export type OpenClawStateReadCommand =
+  | { type: "backup.runs" }
   | TuiLastSessionReadCommand
   | ChannelIngressReadCommand
   | { type: "capture.readOnlyEvents"; sessionId: string; limit?: number }
@@ -182,6 +185,7 @@ export type OpenClawStateReadCommand =
   | CronScratchReadCommand
   | { type: "cron.activeReceiptOwners"; agentId: string }
   | { type: "cron.jobNames"; jobIds: string[]; storePath?: string }
+  | { type: "cron.quarantine"; storeKey: string }
   | { type: "subagents.forChildSession"; childSessionKey: string }
   | { type: "exec-approvals.read" }
   | {
@@ -207,6 +211,7 @@ export type OpenClawStateReadCommand =
   | { type: "userProfiles.githubAttribution.resolve"; profileIds: readonly string[] }
   | { type: "userProfiles.email.resolve"; email: string }
   | { type: "userProfiles.catalog" }
+  | { type: "userModelAccounts.links"; profileId: string }
   | { type: "userPreferences.values"; profileIds: readonly string[]; key: string }
   | {
       type: "githubPublication.lifecycle";
@@ -263,6 +268,7 @@ export type OpenClawStateReadRequest = {
 type ReadResult<Reply> = Reply extends { ok: true } ? Omit<Reply, "ok" | "sourceAdmitted"> : never;
 
 export type OpenClawStateReadResult =
+  | { type: "backup.runs"; runs: BackupRunRecord[] }
   | { type: "doctor.gatewayOwnerLease.read"; lease: GatewayOwnerLeaseIdentity | undefined }
   | {
       type: "tui.lastSession.read";
@@ -362,6 +368,7 @@ export type OpenClawStateReadResult =
       observation: CronRunRecoveryObservation;
     }
   | { type: "cron.currentReceipt"; facts: CronRunReceiptCurrentFacts }
+  | { type: "cron.quarantine"; entries: CronQuarantinedJob[] }
   | { type: "cron.scratch"; snapshot: CronScratchSnapshot | undefined }
   | {
       type: "cron.jobNames";
@@ -415,6 +422,10 @@ export type OpenClawStateReadResult =
   | {
       type: "userPreferences.values";
       values: Map<string, unknown>;
+    }
+  | {
+      type: "userModelAccounts.links";
+      links: import("./user-model-accounts.js").UserProfileAuthLink[];
     }
   | {
       type: "userProfiles.reconcile";
@@ -548,6 +559,8 @@ export type OpenClawStateReadOptions = {
   context?: OpenClawStateWorkerContext;
   /** Publication and authority reads must not inherit an inspection snapshot. */
   current?: boolean;
+  /** Active writers may observe live rows; their lifecycle drains the retained reader. */
+  live?: true;
   /** Named committed-status readers may reopen the matching retained warm source. */
   preferIndependentWarmRead?: true;
   mapError?: (error: unknown, phase: OpenClawStateReadPhase) => unknown;

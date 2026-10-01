@@ -22,14 +22,10 @@ import {
 import { readWorkspaceStateSnapshotForDirectoryInDatabase } from "../agents/workspace-state-store.kernel.js";
 import { isChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
 import { readChannelIngressInDatabase } from "../channels/message/ingress-queue-read.worker.js";
-import { readCronScratchSnapshotInDatabase } from "../cron/scratch-read.kernel.js";
-import { readCronJobNamesInDatabase } from "../cron/store/job-name.js";
-import { resolveCronJobsStorePath } from "../cron/store/paths.js";
 import {
-  readActiveCronRunReceiptOwnersInDatabase,
-  readCronRunReceiptCurrentFactsInDatabase,
-} from "../cron/store/run-receipt-read.js";
-import { observeCronRunRecoveryInDatabase } from "../cron/store/run-recovery.read.js";
+  isCronStateReadCommand,
+  readCronStateCommandInDatabase,
+} from "../cron/store/read-command.js";
 import {
   readSharedGitHubPublicationRequestInDatabase,
   readSharedRepositoryGitHubPublicationInDatabase,
@@ -92,6 +88,7 @@ import {
   readAgentDatabaseDeletionSnapshotInDatabase,
   readAgentDeletionJournalStatusInDatabase,
 } from "./agent-deletion-journal.read.js";
+import { readBackupRunsInDatabase } from "./backup-run-records.kernel.js";
 import { readConfigMachineStateRowInDatabase } from "./config-machine-state.js";
 import { readGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.js";
 import { readOnboardingRecommendationsInDatabase } from "./onboarding-recommendations.kernel.js";
@@ -122,6 +119,7 @@ import {
   resolveUserChannelIdentityInDatabase,
 } from "./user-channel-identities.js";
 import { readUserChannelIdentityResult } from "./user-channel-identities.worker.js";
+import { listUserProfileAuthLinksInDatabase } from "./user-model-accounts.js";
 import { selectUserPreferenceValues } from "./user-preferences.store.js";
 import { readUserProfileGitHubCommand } from "./user-profile-github-identity.js";
 import {
@@ -346,36 +344,11 @@ serveOwnedWorkerTasks(
                 record: inspectCurrentConversationBindingRecordInDatabase(db, command.conversation),
               };
             }
-            if (command.type === "cron.observeRunRecovery") {
-              return {
-                type: command.type,
-                observation: observeCronRunRecoveryInDatabase(db, command),
-              };
+            if (command.type === "backup.runs") {
+              return { type: command.type, runs: readBackupRunsInDatabase(db) };
             }
-            if (command.type === "cron.currentReceipt") {
-              return {
-                type: command.type,
-                facts: readCronRunReceiptCurrentFactsInDatabase(db, command),
-              };
-            }
-            if (command.type === "cron.scratch") {
-              return {
-                type: command.type,
-                snapshot: readCronScratchSnapshotInDatabase(db, command),
-              };
-            }
-            if (command.type === "cron.jobNames") {
-              const storePath = command.storePath ?? resolveCronJobsStorePath();
-              return {
-                type: command.type,
-                names: readCronJobNamesInDatabase(db, command.jobIds, storePath),
-              };
-            }
-            if (command.type === "cron.activeReceiptOwners") {
-              return {
-                type: command.type,
-                owners: readActiveCronRunReceiptOwnersInDatabase(db, command.agentId),
-              };
+            if (isCronStateReadCommand(command)) {
+              return readCronStateCommandInDatabase(db, command);
             }
             if (
               command.type === "devicePairing.list" ||
@@ -628,6 +601,14 @@ serveOwnedWorkerTasks(
               return {
                 type: command.type,
                 values: selectUserPreferenceValues(db, command.profileIds, command.key),
+              };
+            }
+            if (command.type === "userModelAccounts.links") {
+              return {
+                type: command.type,
+                links: runSqliteDeferredTransactionSync(db, () =>
+                  listUserProfileAuthLinksInDatabase(db, command.profileId),
+                ),
               };
             }
             if (command.type === "userProfiles.email.resolve") {
