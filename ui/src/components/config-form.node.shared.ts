@@ -158,10 +158,9 @@ export function getSensitiveRenderState(params: {
     isSensitive &&
     !sentinel &&
     (params.revealSensitive || (params.isSensitivePathRevealed?.(params.path) ?? false));
-  const isSensitiveField = Boolean(
+  const isSensitiveField =
     hintForPath(params.path, params.hints)?.sensitive ||
-    isSensitiveConfigPath(configPathKey(params.path)),
-  );
+    isSensitiveConfigPath(configPathKey(params.path));
   return {
     isSensitive,
     isSensitiveField,
