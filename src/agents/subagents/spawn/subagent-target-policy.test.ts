@@ -6,28 +6,30 @@ import {
   resolveRequesterSpawnTargetPolicy,
   resolveSubagentAllowedTargetIds,
   resolveSubagentSpawnTargetConfig,
-  resolveSubagentTargetPolicy,
 } from "./subagent-target-policy.js";
+
+// Admit an explicit `main` -> `target` spawn under the given allowlist.
+function admit(
+  allowAgents: string[] | undefined,
+  target: string,
+  configuredAgentIds: string[] = [],
+) {
+  return resolveRequesterSpawnTargetPolicy({
+    cfg: { agents: { list: [{ id: "main", subagents: { allowAgents } }] } },
+    requesterAgentId: "main",
+    targetAgentId: target,
+    requestedAgentId: target,
+    configuredAgentIds,
+  });
+}
 
 describe("subagent target policy", () => {
   it("defaults to requester-only when no allowlist is configured", () => {
-    expect(
-      resolveSubagentTargetPolicy({
-        requesterAgentId: "main",
-        targetAgentId: "main",
-        requestedAgentId: "main",
-      }),
-    ).toEqual({ ok: true });
-    const result = resolveSubagentTargetPolicy({
-      requesterAgentId: "main",
-      targetAgentId: "other",
-      requestedAgentId: "other",
+    expect(admit(undefined, "main")).toEqual({ ok: true });
+    expect(admit(undefined, "other")).toEqual({
+      ok: false,
+      error: "agentId is not allowed for sessions_spawn (allowed: main)",
     });
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      throw new Error("Expected target policy to reject other agent");
-    }
-    expect(result.allowedText).toBe("main");
   });
 
   it("filters explicit allowlists to configured target ids", () => {
@@ -43,21 +45,10 @@ describe("subagent target policy", () => {
       explicitAllowlistConfigured: true,
     });
 
-    const result = resolveSubagentTargetPolicy({
-      requesterAgentId: "main",
-      targetAgentId: "stale",
-      requestedAgentId: "stale",
-      allowAgents: ["planner", "stale"],
-      configuredAgentIds: ["main", "planner"],
+    expect(admit(["planner", "stale"], "stale", ["main", "planner"])).toEqual({
+      ok: false,
+      error: 'agentId "stale" is not in the configured agent registry (allowed: planner)',
     });
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      throw new Error("Expected target policy to reject stale explicit target");
-    }
-    expect(result.allowedText).toBe("planner");
-    expect(result.error).toBe(
-      'agentId "stale" is not in the configured agent registry (allowed: planner)',
-    );
   });
 
   it("limits wildcard allowlists to configured agents plus the requester", () => {
@@ -87,20 +78,10 @@ describe("subagent target policy", () => {
       explicitAllowlistConfigured: true,
     });
 
-    const result = resolveSubagentTargetPolicy({
-      requesterAgentId: "main",
-      targetAgentId: "beta",
-      requestedAgentId: "beta",
-      allowAgents: ["*", "beta"],
-      configuredAgentIds: ["main", "planner"],
+    expect(admit(["*", "beta"], "beta", ["main", "planner"])).toEqual({
+      ok: false,
+      error: 'agentId "beta" is not in the configured agent registry (allowed: main, planner)',
     });
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      throw new Error("Expected target policy to reject stale mixed explicit target");
-    }
-    expect(result.error).toBe(
-      'agentId "beta" is not in the configured agent registry (allowed: main, planner)',
-    );
   });
 
   it("describes the requester-only default target", () => {
@@ -147,14 +128,7 @@ describe("subagent target policy", () => {
       "No agentId is allowed as an explicit target; the configured allowlist is empty. " +
         'Omit to keep the requester agent ("main").',
     );
-    const result = resolveSubagentTargetPolicy({
-      requesterAgentId: "main",
-      targetAgentId: "main",
-      requestedAgentId: "main",
-      allowAgents: [],
-      configuredAgentIds: ["main"],
-    });
-    expect(result.ok).toBe(false);
+    expect(admit([], "main", ["main"]).ok).toBe(false);
   });
   it("tells the model an explicit agentId is required when requireAgentId is set", () => {
     expect(

@@ -147,7 +147,7 @@ export function resolveRequesterSpawnTargetPolicy(params: {
 }
 
 /** Validate one requested target against subagent spawn policy. */
-export function resolveSubagentTargetPolicy(params: {
+function resolveSubagentTargetPolicy(params: {
   requesterAgentId: string;
   targetAgentId: string;
   requestedAgentId?: string;
