@@ -424,6 +424,7 @@ export function createOpenClawCodingToolsInternal(
           createOpenClawTools({
             ...pluginToolOptions,
             sessionPortalTarget,
+            sandboxSessionRenameOnly: capabilityProfile.policy.sandboxSessionRenameOnly,
             sessionPermissionPolicy,
             requesterIsSubagent: capabilityProfile.policy.subagentPolicy !== undefined,
             execSession: sessionPermissionPolicy
