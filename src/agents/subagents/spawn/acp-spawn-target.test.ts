@@ -68,6 +68,28 @@ describe("describeAcpSpawnTargetParameter", () => {
     );
   });
 
+  describe("with more than 20 harness ids", () => {
+    const ids = Array.from({ length: 25 }, (_, i) => `h${String(i).padStart(2, "0")}`);
+    const capped = `${ids.slice(0, 20).join(", ")} (+5). Only the first 20 ids are listed.`;
+
+    it("caps an allowlisted list", () => {
+      expect(
+        describeAcpSpawnTargetParameter({
+          agents: { list: [{ id: "main" }] },
+          acp: { allowedAgents: ids },
+        }),
+      ).toBe(`ACP harness id from: ${capped} agentId is required.`);
+    });
+
+    it("caps the examples when no allowlist is set", () => {
+      expect(
+        describeAcpSpawnTargetParameter({
+          agents: { list: ids.map((id) => ({ id, runtime: { type: "acp" as const } })) },
+        }),
+      ).toBe(`ACP harness id, for example: ${capped} agentId is required.`);
+    });
+  });
+
   describe("for a subagent requester", () => {
     const acp = { defaultAgent: "codex" };
     const coder = { id: "coder", runtime: { type: "acp" as const } };

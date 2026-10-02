@@ -168,6 +168,37 @@ describe("subagent target policy", () => {
     );
   });
 
+  it("lists up to 20 targets and says when more are not listed", () => {
+    const describeIds = (count: number) => {
+      const ids = Array.from({ length: count }, (_, i) => `agent-${String(i).padStart(2, "0")}`);
+      return describeSubagentSpawnTargetParameter({
+        requesterAgentId: "agent-00",
+        allowAgents: ids,
+        configuredAgentIds: ids,
+      });
+    };
+    const listed = Array.from({ length: 20 }, (_, i) => `agent-${String(i).padStart(2, "0")}`);
+    expect(describeIds(20)).toBe(
+      `Configured agent to target: ${listed.join(", ")}. Omit to keep the requester agent ("agent-00").`,
+    );
+    expect(describeIds(21)).toBe(
+      `Configured agent to target: ${listed.join(", ")} (+1). Only the first 20 ids are listed. ` +
+        'Omit to keep the requester agent ("agent-00").',
+    );
+  });
+
+  it("keeps the description bounded for a very large allowlist", () => {
+    const ids = Array.from({ length: 5000 }, (_, i) => `agent-${i}`);
+    const description = describeSubagentSpawnTargetParameter({
+      requesterAgentId: "main",
+      allowAgents: ids,
+      configuredAgentIds: ids,
+    });
+    expect(description.length).toBeLessThan(1000);
+    expect(description).toContain("(+4980). Only the first 20 ids are listed.");
+    expect(description).not.toContain("agents_list");
+  });
+
   it("checks a target against the requester's requireAgentId and allowAgents", () => {
     const cfg = {
       agents: {

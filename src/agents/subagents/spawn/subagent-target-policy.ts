@@ -8,7 +8,11 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isValidAgentId, normalizeAgentId } from "../../../routing/session-key.js";
+import { summarizeStringEntries } from "../../../shared/string-sample.js";
 import { resolveAgentConfig } from "../../agent-scope-config.js";
+
+// Normalized agent ids are at most 64 chars, so this count also bounds the listed bytes.
+const MAX_LISTED_TARGET_IDS = 20;
 
 type SubagentTargetPolicyResult = { ok: true } | { ok: false; allowedText: string; error: string };
 
@@ -91,6 +95,16 @@ export function resolveSubagentSpawnTargetConfig(
   };
 }
 
+/** Render `label: ids.` for model-facing guidance, capped to the first sorted ids. */
+export function describeTargetIdList(label: string, ids: readonly string[]): string {
+  const list = summarizeStringEntries({ entries: ids, limit: MAX_LISTED_TARGET_IDS });
+  const overflow =
+    ids.length > MAX_LISTED_TARGET_IDS
+      ? ` Only the first ${MAX_LISTED_TARGET_IDS} ids are listed.`
+      : "";
+  return `${label}: ${list}.${overflow}`;
+}
+
 /** Describe the sessions_spawn `agentId` parameter's allowed targets for a requester. */
 export function describeSubagentSpawnTargetParameter(params: {
   requesterAgentId: string;
@@ -120,7 +134,7 @@ export function describeSubagentSpawnTargetParameter(params: {
   if (allowed.allowedIds.filter((id) => id !== requesterAgentId).length === 0) {
     return `Only the requester agent is allowed as a target; no other agentId is configured. ${omitClause}${collectClause}`;
   }
-  return `Configured agent to target: ${allowed.allowedIds.join(", ")}. ${omitClause}${collectClause}`;
+  return `${describeTargetIdList("Configured agent to target", allowed.allowedIds)} ${omitClause}${collectClause}`;
 }
 
 /** Check a spawn target against the requester's `requireAgentId` and `allowAgents`. */

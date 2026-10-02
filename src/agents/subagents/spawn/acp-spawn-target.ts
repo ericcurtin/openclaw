@@ -9,7 +9,10 @@ import {
 } from "../../../routing/session-key.js";
 import { listAgentEntries, resolveAgentEntry } from "../../agent-scope-config.js";
 import { listAgentIds } from "../../agent-scope.js";
-import { resolveRequesterSpawnTargetPolicy } from "./subagent-target-policy.js";
+import {
+  describeTargetIdList,
+  resolveRequesterSpawnTargetPolicy,
+} from "./subagent-target-policy.js";
 
 type ResolvedAcpAgentTarget = {
   ok: true;
@@ -135,11 +138,11 @@ export function describeAcpSpawnTargetParameter(
     .toSorted((a, b) => a.localeCompare(b));
   if (hasAcpAgentAllowlist(cfg) || subagentRequesterId !== undefined) {
     return acceptedIds.length > 0
-      ? `ACP harness id from: ${acceptedIds.join(", ")}. ${omitClause}`
+      ? `${describeTargetIdList("ACP harness id from", acceptedIds)} ${omitClause}`
       : `No ACP harness id is allowed. ${omitClause}`;
   }
-  const examples = acceptedIds.length > 0 ? acceptedIds.join(", ") : "codex, claude";
-  return `ACP harness id, for example: ${examples}. ${omitClause}`;
+  const examples = acceptedIds.length > 0 ? acceptedIds : ["codex", "claude"];
+  return `${describeTargetIdList("ACP harness id, for example", examples)} ${omitClause}`;
 }
 
 /** ACP harness ids and ACP-runtime config agents named by config; native agent ids are excluded. */
