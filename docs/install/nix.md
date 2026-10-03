@@ -56,7 +56,8 @@ When `OPENCLAW_NIX_MODE=1` is set (automatic with nix-openclaw), OpenClaw enters
 For externally managed config without Nix, use
 [`OPENCLAW_CONFIG_READONLY=1`](/cli/config#externally-managed-config). It applies
 the same immutable-config enforcement with generic messaging, without enabling
-Nix-specific behavior. Existing `OPENCLAW_NIX_MODE=1` installs need no changes.
+Nix-specific behavior. Unlike Nix mode, it still allows `doctor --fix` to repair
+runtime state. Existing `OPENCLAW_NIX_MODE=1` installs need no changes.
 
 You can also set it manually:
 

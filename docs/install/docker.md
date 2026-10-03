@@ -231,7 +231,8 @@ When you replace the OpenClaw image but keep the same mounted state/config, the
 image entrypoint runs `openclaw doctor --fix --non-interactive` under exclusive
 maintenance ownership before starting the Gateway. This covers the default image
 command and Compose's foreground Gateway command, including its selected profile.
-Routine image upgrades do not require a separate Doctor pass.
+Routine image upgrades do not require a separate Doctor pass. With
+`OPENCLAW_CONFIG_READONLY=1`, Doctor repairs state and skips config writes.
 
 On older Linux hosts such as Synology DSM, an unavailable `openat2` syscall can
 make older images report that another Gateway owns even an empty state volume.

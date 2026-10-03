@@ -32,8 +32,10 @@ Entries in `env.vars` are ignored, including differently cased spellings; flat
 or change the host-selected read-only mode. Only the host value `1` enables
 this switch. Existing `OPENCLAW_NIX_MODE` behavior is unchanged.
 
-Config writes are blocked, including setup, onboarding, doctor repairs, plugin
-install/update/uninstall/enable/disable, and mutating `openclaw update` flows.
+Config writes are blocked, including setup, onboarding, `doctor --generate-gateway-token`,
+plugin install/update/uninstall/enable/disable, and mutating `openclaw update` flows.
+`doctor --fix` still repairs runtime state, including Docker image activation, but skips
+config writes; config fixes it finds are reported, not applied.
 Startup-derived defaults stay runtime-only. Change the config through your
 external deployment system, then let the Gateway reload it or restart the Gateway
 as needed. Runtime state still needs a writable `OPENCLAW_STATE_DIR`.

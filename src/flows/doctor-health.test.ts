@@ -473,6 +473,28 @@ describe("runDoctorHealthFlow", () => {
     });
   });
 
+  it("allows repair with externally managed config", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      vi.stubEnv("OPENCLAW_CONFIG_READONLY", "1");
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      await runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true });
+      expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
+      expect(runtime.exit).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each([
+    { env: "OPENCLAW_NIX_MODE", options: { repair: true } },
+    { env: "OPENCLAW_NIX_MODE", options: { yes: true } },
+    { env: "OPENCLAW_CONFIG_READONLY", options: { generateGatewayToken: true } },
+  ] as const)("refuses $options under $env", async ({ env, options }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      vi.stubEnv(env, "1");
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      await expect(runDoctorHealthFlow(runtime, options)).rejects.toThrow("immutable");
+    });
+  });
+
   it.each(["default", "configured"] as const)(
     "fails repair when a startup-blocking %s legacy session store remains",
     async (layout) => {

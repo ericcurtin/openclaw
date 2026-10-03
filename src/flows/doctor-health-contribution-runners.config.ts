@@ -64,6 +64,23 @@ export async function runWriteConfigHealth(
     ctx.configResult.shouldWriteConfig === true && ctx.configResultWriteCommitted !== true;
   const shouldWriteConfig =
     configResultWritePending || JSON.stringify(ctx.cfg) !== JSON.stringify(ctx.cfgForPersistence);
+  if (shouldWriteConfig && resolveIsConfigReadOnly(ctx.env ?? process.env)) {
+    // Externally managed config is never rewritten; state repair still runs.
+    if (configResultWritePending) {
+      const { note } = await import("../../packages/terminal-core/src/note.js");
+      note(
+        [
+          "Config fixes were not applied because config is externally managed. Apply them in your deployment source.",
+          ...(ctx.configResult.pendingChangePanels ?? []),
+        ].join("\n"),
+        "Doctor warnings",
+      );
+      // Reported once; later write attempts stay quiet.
+      delete ctx.configResult.pendingChangePanels;
+      ctx.configResult.shouldWriteConfig = false;
+    }
+    return false;
+  }
   if (shouldWriteConfig) {
     const updateDoctorRun = isUpdateDoctorRun(ctx.env ?? process.env);
     const { restoreDoctorConfigEnvRefs } =
@@ -559,7 +576,7 @@ export async function collectWriteConfigHealthFindings(
       requirement: "mutable-config-write-path",
       fixHint: isNixMode
         ? "Edit the Nix source for this install and rebuild; do not run doctor --fix against this config file."
-        : "Edit the config in your external deployment source and redeploy; do not run doctor --fix against this config file.",
+        : "Edit the config in your external deployment source and redeploy; doctor --fix repairs state but never writes this file.",
     });
   }
   if (!configPath) {

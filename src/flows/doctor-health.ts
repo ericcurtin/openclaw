@@ -15,7 +15,7 @@ import {
   isUpdateDoctorLintPass,
 } from "../commands/doctor/shared/update-phase.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
-import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
+import { resolveConfigPath, resolveIsNixMode, resolveStateDir } from "../config/paths.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
 import { formatUpdateDoctorConfigChange } from "../infra/update-doctor-config.js";
@@ -135,7 +135,8 @@ async function runDoctorHealthFlowWithResult(
     cwd: process.cwd(),
   });
 
-  if (options.repair === true || options.yes === true || options.generateGatewayToken === true) {
+  // Externally managed config still allows state repair; config writes are skipped later.
+  if (options.generateGatewayToken || ((options.repair || options.yes) && resolveIsNixMode())) {
     const { assertConfigWriteAllowedInCurrentMode } =
       await import("../config/config-write-guard.js");
     assertConfigWriteAllowedInCurrentMode();

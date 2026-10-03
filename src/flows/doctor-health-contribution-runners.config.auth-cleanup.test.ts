@@ -95,6 +95,22 @@ describe("Doctor retired auth profile cleanup", () => {
     );
   });
 
+  it("skips config writes for externally managed config", async () => {
+    vi.stubEnv("OPENCLAW_CONFIG_READONLY", "1");
+    const ctx = createContext();
+    ctx.configResult.shouldWriteConfig = true;
+    ctx.configResult.pendingChangePanels = ["Moved a to b."];
+
+    expect(await runWriteConfigHealth(ctx)).toBe(false);
+
+    // Pending fixes are reported once, then cleared.
+    expect(ctx.configResult.pendingChangePanels).toBeUndefined();
+    expect(ctx.configResult.shouldWriteConfig).toBe(false);
+    expect(ctx.configWriteRefusal).toBeUndefined();
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    expect(mocks.removeAuthProfilesAcrossOwnerStores).not.toHaveBeenCalled();
+  });
+
   it("keeps retired profiles when the repaired config write fails", async () => {
     mocks.replaceConfigFile.mockRejectedValueOnce(new Error("write failed"));
 

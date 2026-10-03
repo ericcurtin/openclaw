@@ -5,6 +5,7 @@ import fs from "node:fs";
 import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
+import { resolveIsConfigReadOnly } from "../config/paths.js";
 import {
   DoctorStateMigrationRefusalError,
   throwIfDoctorStateMigrationRefused,
@@ -223,7 +224,7 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
   const shouldSetToken =
     ctx.options.generateGatewayToken === true
       ? true
-      : ctx.options.nonInteractive === true
+      : ctx.options.nonInteractive === true || resolveIsConfigReadOnly(ctx.env ?? process.env)
         ? false
         : await ctx.prompter.confirmAutoFix({
             message: "Generate and configure a gateway token now?",
