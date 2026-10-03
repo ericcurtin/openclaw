@@ -140,10 +140,18 @@ const RELEASE_2026_9_7_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string,
   ["@openclaw/onnx:dangerous-exec:src/worker-client.ts", 1],
 ]);
 
-const CURRENT_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
+const RELEASE_2026_9_8_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
   ...RELEASE_2026_9_7_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
   ["@openclaw/llama-cpp-provider:dangerous-exec:src/llama-server-vc-runtime.ts", 1],
 ]);
+
+// The ACPX proxy asset was removed from the packed plugin after 2026.9.8.
+// Preserve the shipped inventory while matching current package contents.
+const CURRENT_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map(
+  [...RELEASE_2026_9_8_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS].filter(
+    ([key]) => key !== "@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.mjs",
+  ),
+);
 
 type ReviewedReleaseLayout = {
   id: string;
@@ -303,71 +311,49 @@ for (const [key, count] of [
   CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(key, count);
 }
 
+const RELEASE_2026_9_8_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS = new Map(
+  CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+);
+
 const CURRENT_SECURITY_INVENTORY_POLICY: PluginSecurityInventoryPolicy = {
   layout: CURRENT_REVIEWED_RELEASE_LAYOUT,
   optionalPackedFindingCounts: CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
   requiredSourceFindingCounts: CURRENT_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
 };
 
-// This loopback-only native fixture owns its temporary home and joins its child.
-// Qualify its reviewed bytes only for current validation, never frozen releases.
-const CURRENT_NATIVE_PERSONA_FIXTURE = {
-  packageName: "@openclaw/codex",
-  path: "src/app-server/run-attempt.skills.native.test.ts",
-  ruleId: "dangerous-exec",
-  count: 1,
-  sha256: "ee2e9bc850d6b8eb43f1a506d82a9f9d8c7471acf45b20f29335c6065be61e18",
-};
-
-const FROZEN_RELEASE_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
-  ["@openclaw/acpx:dangerous-exec:src/codex-auth-bridge.ts", 1],
-  ["@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.mjs", 1],
-  ["@openclaw/codex:dangerous-exec:src/app-server/transport-stdio.ts", 1],
-  ["@openclaw/codex:dangerous-exec:src/node-cli-sessions.ts", 1],
-  ["@openclaw/discord:dangerous-exec:src/voice/audio.ts", 1],
-  ["@openclaw/google-meet:dangerous-exec:src/node-host.ts", 3],
-  ["@openclaw/google-meet:dangerous-exec:src/realtime.ts", 2],
-  ["@openclaw/matrix:dangerous-exec:src/matrix/deps.ts", 1],
-  ["@openclaw/raft:dangerous-exec:src/gateway.ts", 1],
-  ["@openclaw/signal:dangerous-exec:src/daemon.ts", 1],
-  ["@openclaw/voice-call:dangerous-exec:src/tunnel.ts", 4],
-  ["@openclaw/voice-call:dangerous-exec:src/webhook/tailscale.ts", 1],
-]);
-
-const FROZEN_RELEASE_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS = new Map<string, number>([
-  ["@openclaw/acpx:dangerous-exec:dist/mcp-proxy.mjs", 1],
-  ["@openclaw/acpx:dangerous-exec:dist/service-<hash>.js", 1],
-  ["@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.test.ts", 1],
-  ["@openclaw/codex:dangerous-exec:dist/client-<hash>.js", 1],
-  ["@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server.http.test.ts", 1],
-  ["@openclaw/google-meet:dangerous-exec:dist/index.js", 1],
-  ["@openclaw/google-meet:dangerous-exec:src/realtime.process.test.ts", 1],
-  ["@openclaw/openshell-sandbox:dangerous-exec:src/backend.e2e.test.ts", 1],
-  ["@openclaw/openshell-sandbox:dangerous-exec:src/openshell-core.test.ts", 2],
-  ["@openclaw/slack:dynamic-code-execution:dist/outbound-payload.test-harness-<hash>.js", 1],
-  ["@openclaw/voice-call:dangerous-exec:dist/runtime-entry-<hash>.js", 1],
-]);
-
-const FROZEN_EXTENDED_STABLE_2026_7_33_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS = new Map(
-  FROZEN_RELEASE_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
-);
-FROZEN_EXTENDED_STABLE_2026_7_33_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(
-  "@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.test.ts",
-  3,
-);
-
-const FROZEN_EXTENDED_STABLE_2026_6_33_LAYOUT = {
-  id: "extended-stable-2026.6.33",
-  findings: new Map<string, number>([
-    ["@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/http.ts", 1],
-    ["@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/processes.ts", 1],
-  ]),
-};
-
-const FROZEN_EXTENDED_STABLE_2026_7_33_LAYOUT = {
-  id: "extended-stable-2026.7.33",
-  findings: FROZEN_EXTENDED_STABLE_2026_6_33_LAYOUT.findings,
-};
+const REVIEWED_EXACT_PACKED_FIXTURES = [
+  // This loopback-only native fixture owns its temporary home and joins its child.
+  {
+    packageName: "@openclaw/codex",
+    path: "src/app-server/run-attempt.skills.native.test.ts",
+    ruleId: "dangerous-exec",
+    count: 1,
+    sha256: "111364dcbc09d239ddac974953b2fe4d587b32ebcba3da8ac579a0dc1768569a",
+    targetContextRefs: ["", "release/2026.10.1"],
+  },
+  // The frozen 2026.9.9 fixture predates its direct child-process launch. Bind
+  // its zero-finding expectation to the exact shipped bytes so edited inert
+  // input cannot disappear into an empty reviewed inventory.
+  {
+    packageName: "@openclaw/codex",
+    path: "src/app-server/run-attempt.skills.native.test.ts",
+    ruleId: "dangerous-exec",
+    count: 0,
+    sha256: "7892ff3003799d8087edeb48f108ebf050e9a2a20b254f352d09bd50519ae8e8",
+    targetContextRefs: ["release/2026.9.9"],
+    requireExactBytes: true,
+  },
+  // The Windows-only fixture invokes the pinned MXC executable with a generated
+  // config in dry-run mode and a fixed timeout.
+  {
+    packageName: "@openclaw/mxc-sandbox",
+    path: "test/mxc-sdk-wire-contract.integration.test.ts",
+    ruleId: "dangerous-exec",
+    count: 1,
+    sha256: "9b5b0dc1f3f43bf2983135a35e12e53c76d9769bc3abdd5da1f08f2f1085d4ee",
+    targetContextRefs: ["", "release/2026.9.9", "release/2026.10.1"],
+  },
+] as const;
 
 const FROZEN_EXTENDED_STABLE_2026_8_33_LAYOUT = {
   id: "extended-stable-2026.8.33",
@@ -438,24 +424,23 @@ const FROZEN_RELEASE_SECURITY_INVENTORY_POLICIES = new Map<string, PluginSecurit
       requiredSourceFindingCounts: RELEASE_2026_9_7_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
     },
   ],
-  ["release/2026.9.8", CURRENT_SECURITY_INVENTORY_POLICY],
   [
-    "extended-stable/2026.6.33",
+    "release/2026.9.8",
     {
-      layout: FROZEN_EXTENDED_STABLE_2026_6_33_LAYOUT,
-      optionalPackedFindingCounts: FROZEN_RELEASE_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
-      requiredSourceFindingCounts: FROZEN_RELEASE_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+      ...CURRENT_SECURITY_INVENTORY_POLICY,
+      optionalPackedFindingCounts: RELEASE_2026_9_8_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+      requiredSourceFindingCounts: RELEASE_2026_9_8_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
     },
   ],
   [
-    "extended-stable/2026.7.33",
+    "release/2026.9.9",
     {
-      layout: FROZEN_EXTENDED_STABLE_2026_7_33_LAYOUT,
-      optionalPackedFindingCounts:
-        FROZEN_EXTENDED_STABLE_2026_7_33_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
-      requiredSourceFindingCounts: FROZEN_RELEASE_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+      ...CURRENT_SECURITY_INVENTORY_POLICY,
+      optionalPackedFindingCounts: RELEASE_2026_9_8_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+      requiredSourceFindingCounts: RELEASE_2026_9_8_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
     },
   ],
+  ["release/2026.10.1", CURRENT_SECURITY_INVENTORY_POLICY],
   [
     "extended-stable/2026.8.33",
     {
@@ -477,7 +462,6 @@ function selectPluginSecurityInventoryPolicy(
 
 const REVIEWED_LAYOUT_FINDING_COUNTS = new Map<string, number>([
   ...CURRENT_REVIEWED_RELEASE_LAYOUT.findings,
-  ...FROZEN_EXTENDED_STABLE_2026_6_33_LAYOUT.findings,
   ...FROZEN_EXTENDED_STABLE_2026_8_33_LAYOUT.findings,
 ]);
 
@@ -1178,8 +1162,12 @@ async function scanSupplementalInertPluginInput(
       throw new Error(`${plugin.packageName}: supplemental inert package input identity mismatch.`);
     }
     let qualifiedFixtureKey: string | undefined;
-    const fixture = CURRENT_NATIVE_PERSONA_FIXTURE;
-    if (targetContextRef === "" && plugin.packageName === fixture.packageName) {
+    const fixture = REVIEWED_EXACT_PACKED_FIXTURES.find(
+      (candidate) =>
+        candidate.packageName === plugin.packageName &&
+        candidate.targetContextRefs.some((context) => context === targetContextRef),
+    );
+    if (fixture) {
       const entry = staged.inspection.inventory.find(
         (candidate) => candidate.type === "file" && candidate.path === `package/${fixture.path}`,
       );
@@ -1188,6 +1176,8 @@ async function scanSupplementalInertPluginInput(
         expectedReviewedCriticalFindings.push(...Array.from({ length: fixture.count }, () => key));
         if (entry.sha256 === fixture.sha256) {
           qualifiedFixtureKey = key;
+        } else if ("requireExactBytes" in fixture && fixture.requireExactBytes) {
+          throw new Error(`${fixture.packageName}: reviewed exact packed fixture bytes changed.`);
         }
       }
     }
