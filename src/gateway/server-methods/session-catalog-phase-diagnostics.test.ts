@@ -61,7 +61,7 @@ describe("registered catalog list phase diagnostics", () => {
     trustedFlags = [];
     config = { agents: { list: [{ id: "main" }] } };
     projection = createSessionRowProjectionFixture({ cfg: config, store: {} });
-    Object.defineProperty(projection, "needsMaterialization", { get: () => dirty });
+    vi.spyOn(projection, "needsSelectionPreparation").mockImplementation(() => dirty);
     vi.spyOn(projectionAccess, "requireSessionRowProjection").mockReturnValue(projection);
     vi.spyOn(performance, "now").mockImplementation(() => clock);
     vi.spyOn(Date, "now").mockImplementation(() => 1_700_000_000_000 + clock);
@@ -86,7 +86,7 @@ describe("registered catalog list phase diagnostics", () => {
     const final = createDeferredCore();
     const finalStarted = createDeferredCore();
     dirty = true;
-    vi.spyOn(projection, "ensureMaterialized")
+    vi.spyOn(projection, "prepareSelection")
       .mockImplementationOnce(async () => {
         await initial.promise;
         dirty = false;
@@ -209,7 +209,7 @@ describe("registered catalog list phase diagnostics", () => {
     observe();
     const failure = new Error(privateText);
     dirty = true;
-    vi.spyOn(projection, "ensureMaterialized").mockImplementation(async () => {
+    vi.spyOn(projection, "prepareSelection").mockImplementation(async () => {
       clock = 25;
       throw failure;
     });
@@ -223,33 +223,34 @@ describe("registered catalog list phase diagnostics", () => {
     expect(JSON.stringify(phases)).not.toContain(privateText);
   });
 
-  it("avoids CPU sampling without a trusted consumer", async () => {
-    onInternalDiagnosticEvent((event) => {
-      if (event.type === "diagnostic.phase.completed") {
-        phases.push(event);
+  it.each(["untrusted", "unavailable"] as const)(
+    "delivers with %s CPU sampling",
+    async (sampling) => {
+      if (sampling === "untrusted") {
+        onInternalDiagnosticEvent((event) => {
+          if (event.type === "diagnostic.phase.completed") {
+            phases.push(event);
+          }
+        });
+      } else {
+        observe();
+        threadCpuUsage.mockImplementation(() => {
+          throw new Error(privateText);
+        });
       }
-    });
-    hoisted.activeRegistry.sessionCatalogs = [{ provider: provider(privateText) }];
-    const call = startCall("sessions.catalog.list", {}, config);
-    await call.completion;
-    await waitForDiagnosticEventsDrained();
-    expect(call.respond).toHaveBeenCalledWith(true, expect.anything());
-    expect(threadCpuUsage).not.toHaveBeenCalled();
-    expect(phases).toEqual([]);
-  });
-
-  it("keeps elapsed observations and successful delivery when CPU sampling fails", async () => {
-    observe();
-    threadCpuUsage.mockImplementation(() => {
-      throw new Error(privateText);
-    });
-    hoisted.activeRegistry.sessionCatalogs = [{ provider: provider(privateText) }];
-    const call = startCall("sessions.catalog.list", {}, config);
-    await call.completion;
-    await waitForDiagnosticEventsDrained();
-    expect(call.respond).toHaveBeenCalledWith(true, expect.anything());
-    expect(phases).toHaveLength(3);
-    expect(phases.every((event) => event.details === undefined)).toBe(true);
-    expect(JSON.stringify(phases)).not.toContain(privateText);
-  });
+      hoisted.activeRegistry.sessionCatalogs = [{ provider: provider(privateText) }];
+      const call = startCall("sessions.catalog.list", {}, config);
+      await call.completion;
+      await waitForDiagnosticEventsDrained();
+      expect(call.respond).toHaveBeenCalledWith(true, expect.anything());
+      if (sampling === "untrusted") {
+        expect(threadCpuUsage).not.toHaveBeenCalled();
+        expect(phases).toEqual([]);
+      } else {
+        expect(phases).toHaveLength(3);
+        expect(phases.every((event) => event.details === undefined)).toBe(true);
+        expect(JSON.stringify(phases)).not.toContain(privateText);
+      }
+    },
+  );
 });
