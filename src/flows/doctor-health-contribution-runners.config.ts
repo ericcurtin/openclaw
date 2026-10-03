@@ -42,9 +42,9 @@ export async function runWriteConfigHealth(
   if (ctx.configWriteError) {
     throw ctx.configWriteError;
   }
-  if (ctx.configWriteRefusal) {
-    // The initial write already reported the refusal; retrying the
-    // same candidate would fail identically and duplicate the warning.
+  if (ctx.configWriteRefusal || ctx.configWriteSkipped) {
+    // The initial write already reported the refusal or skip; retrying the
+    // same candidate would repeat the warning and must not authorize cleanup.
     return false;
   }
   const { applyWizardMetadata } = await import("../commands/onboard-helpers.js");
@@ -75,10 +75,9 @@ export async function runWriteConfigHealth(
         ].join("\n"),
         "Doctor warnings",
       );
-      // Reported once; later write attempts stay quiet.
-      delete ctx.configResult.pendingChangePanels;
-      ctx.configResult.shouldWriteConfig = false;
     }
+    // The candidate never reached disk: later passes must not run dependent cleanup.
+    ctx.configWriteSkipped = true;
     return false;
   }
   if (shouldWriteConfig) {

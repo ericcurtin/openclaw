@@ -67,6 +67,8 @@ export type DoctorHealthFlowContext = {
   configResultWriteCommitted?: boolean;
   /** The requested config write was refused; later repairs must not consume its candidate. */
   configWriteRefusal?: "validation" | "cron-owner-safety" | "include-ownership" | "config-conflict";
+  /** Externally managed config left the candidate unwritten; later passes stay quiet and skip dependent cleanup. */
+  configWriteSkipped?: boolean;
   /** A post-commit failure is terminal for this context; retry needs a fresh inspected snapshot. */
   configWriteError?: ConfigWritePostCommitError;
   /** One-shot repairs that require a durable config write have completed. */

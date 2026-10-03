@@ -10,6 +10,8 @@ import { writeDoctorGatewayConfig } from "./doctor-health-contribution-runners.g
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 
 const mocks = vi.hoisted(() => ({
+  finalizeRetiredPhoneControlCleanup: vi.fn(async () => ({ changes: [], warnings: [] })),
+  note: vi.fn(),
   removeAuthProfilesAcrossOwnerStores: vi.fn(async () => true),
   replaceConfigFile: vi.fn<
     (_params: unknown) => Promise<
@@ -23,6 +25,12 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../agents/auth-profiles.js", () => ({
   removeAuthProfilesAcrossOwnerStores: mocks.removeAuthProfilesAcrossOwnerStores,
 }));
+
+vi.mock("../commands/doctor-retired-phone-control.js", () => ({
+  finalizeRetiredPhoneControlCleanup: mocks.finalizeRetiredPhoneControlCleanup,
+}));
+
+vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
 
 vi.mock("../commands/doctor/shared/config-flow-steps.js", () => ({
   restoreDoctorConfigEnvRefs: (cfg: OpenClawConfig) => cfg,
@@ -74,6 +82,8 @@ function createContext(): DoctorHealthFlowContext {
 
 describe("Doctor retired auth profile cleanup", () => {
   beforeEach(() => {
+    mocks.finalizeRetiredPhoneControlCleanup.mockClear();
+    mocks.note.mockClear();
     mocks.removeAuthProfilesAcrossOwnerStores.mockClear().mockResolvedValue(true);
     mocks.replaceConfigFile.mockReset().mockResolvedValue({
       path: "/tmp/openclaw.json",
@@ -95,20 +105,24 @@ describe("Doctor retired auth profile cleanup", () => {
     );
   });
 
-  it("skips config writes for externally managed config", async () => {
+  it("skips config writes and dependent cleanup for externally managed config", async () => {
     vi.stubEnv("OPENCLAW_CONFIG_READONLY", "1");
     const ctx = createContext();
+    // A real Doctor run clones the candidate, so later passes see no config diff.
+    ctx.cfgForPersistence = structuredClone(ctx.cfg);
     ctx.configResult.shouldWriteConfig = true;
     ctx.configResult.pendingChangePanels = ["Moved a to b."];
+    ctx.configResult.retiredPhoneControlStateCleanupPending = true;
 
+    expect(await runWriteConfigHealth(ctx, { runPostWriteRepairs: false })).toBe(false);
     expect(await runWriteConfigHealth(ctx)).toBe(false);
 
-    // Pending fixes are reported once, then cleared.
-    expect(ctx.configResult.pendingChangePanels).toBeUndefined();
-    expect(ctx.configResult.shouldWriteConfig).toBe(false);
+    // Pending fixes are reported once, and the skipped write keeps cleanup fenced.
+    expect(mocks.note).toHaveBeenCalledOnce();
     expect(ctx.configWriteRefusal).toBeUndefined();
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
     expect(mocks.removeAuthProfilesAcrossOwnerStores).not.toHaveBeenCalled();
+    expect(mocks.finalizeRetiredPhoneControlCleanup).not.toHaveBeenCalled();
   });
 
   it("keeps retired profiles when the repaired config write fails", async () => {
