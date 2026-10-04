@@ -15,7 +15,7 @@ function admit(
   configuredAgentIds: string[] = [],
 ) {
   return resolveRequesterSpawnTargetPolicy({
-    cfg: { agents: { list: [{ id: "main", subagents: { allowAgents } }] } },
+    cfg: { agents: { entries: { main: { subagents: { allowAgents } } } } },
     requesterAgentId: "main",
     targetAgentId: target,
     requestedAgentId: target,
@@ -202,7 +202,7 @@ describe("subagent target policy", () => {
   it("checks a target against the requester's requireAgentId and allowAgents", () => {
     const cfg = {
       agents: {
-        list: [{ id: "main", subagents: { allowAgents: ["planner"], requireAgentId: true } }],
+        entries: { main: { subagents: { allowAgents: ["planner"], requireAgentId: true } } },
       },
     };
     const base = { cfg, requesterAgentId: "main", configuredAgentIds: ["main", "planner"] };
@@ -230,10 +230,10 @@ describe("subagent target policy", () => {
     const cfg = {
       agents: {
         defaults: { subagents: { allowAgents: ["main"], requireAgentId: true } },
-        list: [
-          { id: "main" },
-          { id: "lead", subagents: { allowAgents: ["main", "lead"], requireAgentId: false } },
-        ],
+        entries: {
+          main: {},
+          lead: { subagents: { allowAgents: ["main", "lead"], requireAgentId: false } },
+        },
       },
     };
     expect(resolveSubagentSpawnTargetConfig(cfg, "main")).toEqual({
@@ -250,7 +250,7 @@ describe("subagent target policy", () => {
         {
           agents: {
             defaults: { subagents: { requireAgentId: true } },
-            list: [{ id: "main", subagents: { allowAgents: ["*"] } }],
+            entries: { main: { subagents: { allowAgents: ["*"] } } },
           },
         },
         "main",

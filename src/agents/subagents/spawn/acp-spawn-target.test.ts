@@ -22,20 +22,20 @@ describe("resolveTargetAcpAgentId", () => {
 
 describe("describeAcpSpawnTargetParameter", () => {
   it("requires agentId and suggests examples with an empty configuration", () => {
-    expect(describeAcpSpawnTargetParameter({ agents: { list: [] } })).toBe(
+    expect(describeAcpSpawnTargetParameter({ agents: { entries: {} } })).toBe(
       "ACP harness id, for example: codex, claude. agentId is required.",
     );
   });
 
   it("describes the configured default when no allowlist is set", () => {
     expect(
-      describeAcpSpawnTargetParameter({ agents: { list: [] }, acp: { defaultAgent: "codex" } }),
+      describeAcpSpawnTargetParameter({ agents: { entries: {} }, acp: { defaultAgent: "codex" } }),
     ).toBe('ACP harness id, for example: codex. Omit to use the configured ACP default ("codex").');
   });
 
   it("does not offer a native config agent as an ACP harness", () => {
     const description = describeAcpSpawnTargetParameter({
-      agents: { list: [{ id: "main" }, { id: "coder", runtime: { type: "acp" } }] },
+      agents: { entries: { main: {}, coder: { runtime: { type: "acp" } } } },
       acp: { defaultAgent: "codex" },
     });
     expect(description).toBe(
@@ -47,7 +47,7 @@ describe("describeAcpSpawnTargetParameter", () => {
   it("lists only allowlisted ids and drops a default the allowlist rejects", () => {
     expect(
       describeAcpSpawnTargetParameter({
-        agents: { list: [{ id: "main" }] },
+        agents: { entries: { main: {} } },
         acp: { allowedAgents: ["codex", "claude"], defaultAgent: "gemini" },
       }),
     ).toBe("ACP harness id from: claude, codex. agentId is required.");
@@ -56,7 +56,7 @@ describe("describeAcpSpawnTargetParameter", () => {
   it("does not advertise wildcard access the policy does not grant", () => {
     expect(
       describeAcpSpawnTargetParameter({
-        agents: { list: [] },
+        agents: { entries: {} },
         acp: { allowedAgents: ["*"], defaultAgent: "codex" },
       }),
     ).toBe("No ACP harness id is allowed. agentId is required.");
@@ -75,7 +75,7 @@ describe("describeAcpSpawnTargetParameter", () => {
     it("caps an allowlisted list", () => {
       expect(
         describeAcpSpawnTargetParameter({
-          agents: { list: [{ id: "main" }] },
+          agents: { entries: { main: {} } },
           acp: { allowedAgents: ids },
         }),
       ).toBe(`ACP harness id from: ${capped} agentId is required.`);
@@ -84,7 +84,11 @@ describe("describeAcpSpawnTargetParameter", () => {
     it("caps the examples when no allowlist is set", () => {
       expect(
         describeAcpSpawnTargetParameter({
-          agents: { list: ids.map((id) => ({ id, runtime: { type: "acp" as const } })) },
+          agents: {
+            entries: Object.fromEntries(
+              ids.map((id) => [id, { runtime: { type: "acp" as const } }]),
+            ),
+          },
         }),
       ).toBe(`ACP harness id, for example: ${capped} agentId is required.`);
     });
@@ -92,11 +96,11 @@ describe("describeAcpSpawnTargetParameter", () => {
 
   describe("for a subagent requester", () => {
     const acp = { defaultAgent: "codex" };
-    const coder = { id: "coder", runtime: { type: "acp" as const } };
+    const coder = { runtime: { type: "acp" as const } };
 
     it("offers no harness when the requester may only target itself", () => {
       expect(
-        describeAcpSpawnTargetParameter({ agents: { list: [{ id: "main" }, coder] }, acp }, "main"),
+        describeAcpSpawnTargetParameter({ agents: { entries: { main: {}, coder } }, acp }, "main"),
       ).toBe("No ACP harness id is allowed. agentId is required.");
     });
 
@@ -105,7 +109,7 @@ describe("describeAcpSpawnTargetParameter", () => {
         describeAcpSpawnTargetParameter(
           {
             agents: {
-              list: [{ id: "main", subagents: { allowAgents: ["codex"] } }, coder],
+              entries: { main: { subagents: { allowAgents: ["codex"] } }, coder },
             },
             acp,
           },
@@ -120,7 +124,7 @@ describe("describeAcpSpawnTargetParameter", () => {
           {
             agents: {
               defaults: { subagents: { allowAgents: ["*"], requireAgentId: true } },
-              list: [{ id: "main" }, coder],
+              entries: { main: {}, coder },
             },
             acp,
           },

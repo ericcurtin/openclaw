@@ -1093,7 +1093,7 @@ describe("sessions_spawn tool", () => {
       tools: { swarm: { defaultAgentId: "planner" } },
       agents: {
         defaults: { subagents: { allowAgents: ["main", "planner"] } },
-        list: [{ id: "main" }, { id: "planner" }],
+        entries: { main: {}, planner: {} },
       },
     };
     const tool = makeTool({ config });
@@ -1123,7 +1123,7 @@ describe("sessions_spawn tool", () => {
       session: { store: storePath },
       acp: { defaultAgent: "codex" },
       agents: {
-        list: [{ id: "main", subagents: { allowAgents: ["codex"], requireAgentId: true } }],
+        entries: { main: { subagents: { allowAgents: ["codex"], requireAgentId: true } } },
       },
     };
     const narrowed = 'With runtime="acp": ACP harness id from: codex. agentId is required.';
