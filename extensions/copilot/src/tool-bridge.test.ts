@@ -294,7 +294,7 @@ describe("createCopilotToolBridge", () => {
   it("throws on duplicate tool names and lists all duplicates", async () => {
     await expect(
       createCopilotToolBridge({
-        attemptParams: { toolsAllow: ["alpha", "beta"] },
+        attemptParams: { config: { tools: { toolSearch: false } }, toolsAllow: ["alpha", "beta"] },
         createOpenClawCodingTools: () => makeTools("alpha", "beta", "alpha", "beta"),
       }),
     ).rejects.toThrow("duplicate tool names: alpha, beta");
@@ -346,7 +346,7 @@ describe("createCopilotToolBridge", () => {
             sessionId,
             workspaceDir,
             attemptParams: {
-              config: { tools: { fs: { workspaceOnly: true } } },
+              config: { tools: { fs: { workspaceOnly: true }, toolSearch: false } },
               onToolOutcome,
               isTurnTainted,
               runId: sessionId,
@@ -725,6 +725,7 @@ describe("createCopilotToolBridge", () => {
       const createOpenClawCodingTools = vi.fn(() => makeTools("read", "message"));
       const result = await createCopilotToolBridge({
         attemptParams: {
+          config: { tools: { toolSearch: false } },
           toolsAllow: ["read"],
           forceMessageTool: true,
           disableMessageTool: true,
@@ -976,6 +977,7 @@ describe("createCopilotToolBridge tool conversion", () => {
     const observeTerminal = createContractToolTerminalObserver("copilot-ordering-run");
     const bridge = await createCopilotToolBridge({
       attemptParams: {
+        config: { tools: { toolSearch: false } },
         observeToolTerminal: (observation) => {
           if (observation.toolCallId === "call-0") {
             throw failure;
@@ -1065,6 +1067,7 @@ describe("createCopilotToolBridge tool conversion", () => {
       createCopilotToolBridge({
         sessionId,
         abortSignal,
+        attemptParams: { config: { tools: { toolSearch: false } } },
         createOpenClawCodingTools: () => [
           makeTool({
             name: "exclusive",
