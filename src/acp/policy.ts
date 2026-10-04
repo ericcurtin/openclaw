@@ -34,7 +34,7 @@ export function resolveAcpExplicitTurnPolicyError(cfg: OpenClawConfig): AcpRunti
 }
 
 function listAcpAllowedAgentIds(cfg: OpenClawConfig): string[] {
-  return (cfg.acp?.allowedAgents ?? []).map((entry) => normalizeAgentId(entry)).filter(Boolean);
+  return (cfg.acp?.allowedAgents ?? []).map(normalizeAgentId).filter(Boolean);
 }
 
 /** Returns whether `acp.allowedAgents` restricts ACP target ids. */
@@ -42,17 +42,12 @@ export function hasAcpAgentAllowlist(cfg: OpenClawConfig): boolean {
   return listAcpAllowedAgentIds(cfg).length > 0;
 }
 
-function isAcpAgentAllowedByPolicy(cfg: OpenClawConfig, agentId: string): boolean {
-  return (
-    !hasAcpAgentAllowlist(cfg) || listAcpAllowedAgentIds(cfg).includes(normalizeAgentId(agentId))
-  );
-}
-
 export function resolveAcpAgentPolicyError(
   cfg: OpenClawConfig,
   agentId: string,
 ): AcpRuntimeError | null {
-  if (isAcpAgentAllowedByPolicy(cfg, agentId)) {
+  const allowed = listAcpAllowedAgentIds(cfg);
+  if (allowed.length === 0 || allowed.includes(normalizeAgentId(agentId))) {
     return null;
   }
   return new AcpRuntimeError(
