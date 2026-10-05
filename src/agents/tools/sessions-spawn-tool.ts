@@ -5,7 +5,11 @@ import { resolveThreadBindingSpawnPolicy } from "../../channels/thread-bindings-
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSnakeCaseParamKey } from "../../param-key.js";
-import { isSubagentSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
+import {
+  isSubagentSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import {
   mergeAcceptedSessionSpawnsForRun,
@@ -19,6 +23,7 @@ import {
   formatAcpInheritedToolDenyError,
 } from "../inherited-tool-deny.js";
 import { optionalStringEnum, requesterProfileSchema } from "../schema/typebox.js";
+import { resolveSenderRestrictedSpawnError } from "../spawn-requester-policy.js";
 import { withParentExecutionIdentity } from "../subagents/spawn/execution-identity-spawn-context.js";
 import { resolveAcpSessionsSpawnImageAttachments } from "../subagents/spawn/subagent-attachments.js";
 import {
@@ -447,6 +452,15 @@ export function createSessionsSpawnTool(
           throw new ToolInputError('sessions_spawn collect=true supports runtime="subagent" only.');
         }
         const requestedAgentId = readToolStringParam(params, "agentId");
+        const requesterPolicyError = resolveSenderRestrictedSpawnError({
+          inheritedToolPolicySource: opts?.inheritedToolPolicySource,
+          requesterAgentId,
+          targetAgentId: requestedAgentId ? normalizeAgentId(requestedAgentId) : undefined,
+          visible: params.visible === true,
+        });
+        if (requesterPolicyError) {
+          return jsonResult({ status: "forbidden", error: requesterPolicyError });
+        }
         const resumeSessionId = readToolStringParam(params, "resumeSessionId");
         const modelOverride = normalizeToolModelOverride(readToolStringParam(params, "model"));
         const thinkingOverrideRaw = readToolStringParam(params, "thinking");
@@ -576,6 +590,7 @@ export function createSessionsSpawnTool(
           sandboxed: opts?.sandboxed,
           inheritedToolAllowlist: opts?.inheritedToolAllowlist,
           inheritedToolDenylist: opts?.inheritedToolDenylist,
+          inheritedToolPolicySource: opts?.inheritedToolPolicySource,
         });
 
         if (runtime === "acp") {
@@ -603,6 +618,8 @@ export function createSessionsSpawnTool(
                 ...inheritedSpawnContext(),
                 currentMessagingTarget: opts?.currentMessagingTarget,
                 agentGroupId: opts?.agentGroupId ?? undefined,
+                workspaceDir: opts?.workspaceDir,
+                sessionPermissionPolicy: opts?.sessionPermissionPolicy,
               },
               parentExecutionIdentityToken,
             ),

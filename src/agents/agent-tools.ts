@@ -485,6 +485,7 @@ function* assembleOpenClawCodingTools(
             ...(cronSelfRemoveOnlyJobId ? { cronSelfRemoveOnlyJobId } : {}),
             inheritedToolAllowlist,
             inheritedToolDenylist,
+            inheritedToolPolicySource: capabilityProfile.policy.inheritedToolPolicySource,
             processScopeKey: scopeKey,
           },
         )
