@@ -124,10 +124,12 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     params.userTurnTranscriptRecorder?.message ??
     (await params.userTurnTranscriptRecorder?.resolveMessage());
   assertProjectionCurrent();
-  // A refreshed native thread receives the original admitted user as historical context.
-  const currentUserTurnIdempotencyKey = params.pluginRuntimeRefreshMessages
-    ? undefined
-    : admittedMessage?.idempotencyKey;
+  // Internal prompts (runtime refresh, retry continuation) do not carry the admitted
+  // request, so history must keep it as context.
+  const currentUserTurnIdempotencyKey =
+    params.pluginRuntimeRefreshMessages || params.skipPreparedUserTurnMessage
+      ? undefined
+      : admittedMessage?.idempotencyKey;
   const prepareFileContext: NonNullable<
     Parameters<typeof projectContextEngineAssemblyForCodex>[0]["prepareFileContext"]
   > = async (message, maxChars) => {

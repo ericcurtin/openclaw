@@ -320,6 +320,48 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     },
   );
 
+  it.each([false, true])(
+    "keeps the admitted request in projected history when the prompt is internal: %s",
+    async (internal) => {
+      const harness = createStartedThreadHarness();
+      const params = createParams(
+        path.join(tempDir, "session-internal-prompt.jsonl"),
+        path.join(tempDir, "workspace-internal-prompt"),
+      );
+      const request = "Summarize the migration plan";
+      const admittedMessage = {
+        ...userMessage(request, 10),
+        idempotencyKey: "internal-prompt:user",
+      };
+      params.contextEngine = createContextEngine({
+        assemble: vi.fn(async () => ({
+          messages: [assistantMessage("Earlier task finished.", 5), admittedMessage],
+          estimatedTokens: 42,
+        })),
+      });
+      params.prompt = internal
+        ? "Continue the current task from the existing transcript."
+        : request;
+      params.skipPreparedUserTurnMessage = internal;
+      params.userTurnTranscriptRecorder = {
+        message: admittedMessage,
+        resolveMessage: async () => admittedMessage,
+        markRuntimePersisted() {},
+        getAdmissionReceipt: () => undefined,
+      } as EmbeddedRunAttemptParams["userTurnTranscriptRecorder"];
+
+      const run = runCodexAppServerAttempt(params);
+      await harness.waitForMethod("turn/start");
+
+      const [history, current] = getRequestInputText(harness).split("Current user request:\n");
+      expect(current).toContain(params.prompt);
+      expect(history?.includes(request)).toBe(internal);
+
+      await harness.completeTurn();
+      await run;
+    },
+  );
+
   it("bounds active context-engine projections when prompt hooks append context", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([
