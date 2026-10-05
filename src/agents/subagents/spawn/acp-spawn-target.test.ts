@@ -44,6 +44,14 @@ describe("describeAcpSpawnTargetParameter", () => {
     expect(description).not.toContain("main");
   });
 
+  it.each([
+    [["codex"], "ACP harness id, for example: claude. agentId is required."],
+    [["codex", "claude"], "ACP harness id. agentId is required."],
+  ])("drops example ids that are native config agents: %j", (native, expected) => {
+    const entries = Object.fromEntries(native.map((id) => [id, {}]));
+    expect(describeAcpSpawnTargetParameter({ agents: { entries } })).toBe(expected);
+  });
+
   it("lists only allowlisted ids and drops a default the allowlist rejects", () => {
     expect(
       describeAcpSpawnTargetParameter({

@@ -141,8 +141,10 @@ export function describeAcpSpawnTargetParameter(
       ? `${describeTargetIdList("ACP harness id from", acceptedIds)} ${omitClause}`
       : `No ACP harness id is allowed. ${omitClause}`;
   }
-  const examples = acceptedIds.length > 0 ? acceptedIds : ["codex", "claude"];
-  return `${describeTargetIdList("ACP harness id, for example", examples)} ${omitClause}`;
+  const examples = acceptedIds.length > 0 ? acceptedIds : ["codex", "claude"].filter(isAccepted);
+  return examples.length > 0
+    ? `${describeTargetIdList("ACP harness id, for example", examples)} ${omitClause}`
+    : `ACP harness id. ${omitClause}`;
 }
 
 /** ACP harness ids and ACP-runtime config agents named by config; native agent ids are excluded. */
