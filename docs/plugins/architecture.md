@@ -472,6 +472,10 @@ acquired by that context. The first catalog request prepares registrations for t
 agent's known configured and credential providers together; only the requested
 providers run catalog hooks. Newly observed owners extend that context without
 discarding earlier owners. Replacement releases them after admitted work settles.
+After successful physical cleanup, retired plugin instances release their registry
+references while preserving revocation. Native module exports no longer retain the
+disposed registry through instance ownership, and stale calls remain rejected. Pending or failed
+cleanup retains its custody.
 Successfully disposed registrations leave their plugin caches.
 
 Catalog observation is passive. Inventory requests can ask the catalog owner to
@@ -570,7 +574,9 @@ When using Jiti's TypeScript path settings, keep the original tsconfig files and
 configuration dependencies available while the plugin is active. Loaded modules
 retain their selected path mappings; previously unvisited modules may read those
 configuration files on first use. Newly loaded instances select the current
-path settings.
+path settings. On Windows, explicit and relative tsconfig paths still resolve
+managed imports from the instance's captured source, including lazy imports
+after source files are edited.
 
 Registry retirement revokes managed execution separately from physical resource
 release. An acquired inspection can release its execution authority while a
