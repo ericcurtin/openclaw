@@ -168,6 +168,22 @@ describe("subagent target policy", () => {
     );
   });
 
+  it("limits guidance to the requester for a sender-restricted session", () => {
+    const description = describeSubagentSpawnTargetParameter({
+      requesterAgentId: "main",
+      allowAgents: ["planner"],
+      configuredAgentIds: ["main", "planner"],
+      collectDefaultAgentId: "planner",
+      inheritedToolPolicySource: "sender",
+    });
+    expect(description).toBe(
+      "Sender policy allows only hidden helpers of the requester agent; no other agentId is allowed. " +
+        'Omit to keep the requester agent ("main"). ' +
+        'With collect=true, agentId is required; tools.swarm.defaultAgentId ("planner") is not an allowed target.',
+    );
+    expect(description).not.toContain("Configured agent to target");
+  });
+
   it("lists up to 20 targets and says when more are not listed", () => {
     const describeIds = (count: number) => {
       const ids = Array.from({ length: count }, (_, i) => `agent-${String(i).padStart(2, "0")}`);

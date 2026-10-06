@@ -342,6 +342,7 @@ export function createSessionsSpawnTool(
     requesterIsSubagent: opts?.requesterIsSubagent ?? isSubagentSessionKey(opts?.agentSessionKey),
     acpAvailable,
     collectDefaultAgentId: swarmConfig.enabled ? swarmConfig.defaultAgentId : undefined,
+    spawnContext: opts,
   });
   const parameters = createSessionsSpawnToolSchema({
     acpAvailable,

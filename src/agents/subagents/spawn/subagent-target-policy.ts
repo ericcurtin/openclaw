@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isValidAgentId, normalizeAgentId } from "../../../routing/session-key.js";
 import { summarizeStringEntries } from "../../../shared/string-sample.js";
 import { resolveAgentConfig } from "../../agent-scope-config.js";
+import { resolveSenderRestrictedSpawnError } from "../../spawn-requester-policy.js";
 
 // Normalized agent ids are at most 64 chars, so this count also bounds the listed bytes.
 const MAX_LISTED_TARGET_IDS = 20;
@@ -88,9 +89,26 @@ export function describeSubagentSpawnTargetParameter(params: {
   requireAgentId?: boolean;
   /** `tools.swarm.defaultAgentId`, used when collect=true omits agentId. */
   collectDefaultAgentId?: string;
+  inheritedToolPolicySource?: "sender";
 }): string {
   const requesterAgentId = normalizeAgentId(params.requesterAgentId);
-  const allowed = resolveSubagentAllowedTargetIds(params);
+  const senderRestricted = params.inheritedToolPolicySource === "sender";
+  const policyAllowed = resolveSubagentAllowedTargetIds(params);
+  // Sender restrictions apply on top of the allowlist; reuse their owner to filter targets.
+  const allowed = senderRestricted
+    ? {
+        ...policyAllowed,
+        allowAny: false,
+        allowedIds: policyAllowed.allowedIds.filter(
+          (id) =>
+            !resolveSenderRestrictedSpawnError({
+              inheritedToolPolicySource: params.inheritedToolPolicySource,
+              requesterAgentId,
+              targetAgentId: id,
+            }),
+        ),
+      }
+    : policyAllowed;
   const omitClause = params.requireAgentId
     ? `agentId is required; the requester agent is "${requesterAgentId}".`
     : `Omit to keep the requester agent ("${requesterAgentId}").`;
@@ -100,6 +118,9 @@ export function describeSubagentSpawnTargetParameter(params: {
     : isValidAgentId(collectId) && allowed.allowedIds.includes(normalizeAgentId(collectId))
       ? ` With collect=true, omit to target tools.swarm.defaultAgentId ("${collectId}").`
       : ` With collect=true, agentId is required; tools.swarm.defaultAgentId ("${collectId}") is not an allowed target.`;
+  if (senderRestricted) {
+    return `Sender policy allows only hidden helpers of the requester agent; no other agentId is allowed. ${omitClause}${collectClause}`;
+  }
   if (allowed.allowAny) {
     return `Configured agent to target; any configured agent is allowed. ${omitClause}${collectClause}`;
   }

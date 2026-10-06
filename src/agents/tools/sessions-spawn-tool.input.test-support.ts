@@ -224,4 +224,25 @@ export function registerSessionsSpawnInputTests({
     expect(descriptionFor("agent:main:subagent:child")).toContain(narrowed);
     expect(descriptionFor("agent:main:main")).toContain(omitDefault);
   });
+
+  it("advertises only the requester to a sender-restricted session", () => {
+    registerAcpBackendForTest();
+    const config = {
+      acp: { defaultAgent: "codex" },
+      tools: { swarm: { defaultAgentId: "planner" } },
+      agents: {
+        defaults: { subagents: { allowAgents: ["main", "planner"] } },
+        entries: { main: {}, planner: {} },
+      },
+    };
+    const description = createTool({ config, inheritedToolPolicySource: "sender" }).description;
+    expect(description).toContain(
+      "Sender policy allows only hidden helpers of the requester agent",
+    );
+    expect(description).toContain('With runtime="acp": No ACP harness id is allowed.');
+    expect(description).not.toContain("Configured agent to target");
+    expect(description).toContain(
+      'tools.swarm.defaultAgentId ("planner") is not an allowed target',
+    );
+  });
 }

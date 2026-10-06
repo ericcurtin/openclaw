@@ -141,4 +141,27 @@ describe("describeAcpSpawnTargetParameter", () => {
       ).toBe("ACP harness id from: coder, codex. agentId is required.");
     });
   });
+
+  describe("for a sender-restricted session", () => {
+    const cfg = { agents: { entries: { main: {}, coder: { runtime: { type: "acp" as const } } } } };
+    const sender = { requesterAgentId: "main", inheritedToolPolicySource: "sender" as const };
+
+    it("offers no harness other than the requester", () => {
+      expect(
+        describeAcpSpawnTargetParameter(
+          { ...cfg, acp: { defaultAgent: "codex" } },
+          undefined,
+          sender,
+        ),
+      ).toBe("No ACP harness id is allowed. agentId is required.");
+    });
+
+    it("keeps the unrestricted guidance when the sender is not restricted", () => {
+      expect(
+        describeAcpSpawnTargetParameter(cfg, undefined, {
+          requesterAgentId: "main",
+        }),
+      ).toBe("ACP harness id, for example: coder. agentId is required.");
+    });
+  });
 });

@@ -9,6 +9,7 @@ import {
 } from "../../../routing/session-key.js";
 import { listAgentEntries, resolveAgentEntry } from "../../agent-scope-config.js";
 import { listAgentIds } from "../../agent-scope.js";
+import { resolveAcpSenderSpawnError } from "./acp-spawn-policy.js";
 import {
   describeTargetIdList,
   resolveRequesterSpawnTargetPolicy,
@@ -106,17 +107,21 @@ function isExplicitlyAllowedAcpAgent(cfg: OpenClawConfig, agentId: string): bool
 /**
  * Describe the sessions_spawn `agentId` parameter for `runtime="acp"`.
  * Pass `subagentRequesterId` when the requester is a subagent: ACP spawns then
- * also go through its requireAgentId and allowAgents policy.
+ * also go through its requireAgentId and allowAgents policy. Pass `sender` to
+ * apply the inherited sender restrictions ACP admission enforces.
  */
 export function describeAcpSpawnTargetParameter(
   cfg: OpenClawConfig,
   subagentRequesterId?: string,
+  sender?: Omit<Parameters<typeof resolveAcpSenderSpawnError>[0], "targetAgentId" | "cwd">,
 ): string {
+  const senderRestricted = sender?.inheritedToolPolicySource === "sender";
   // Ask the real admission path so the text never advertises a rejected id.
   const isAccepted = (requestedAgentId?: string) => {
     const target = resolveTargetAcpAgentId({ requestedAgentId, cfg });
     return (
       target.ok &&
+      (!sender || !resolveAcpSenderSpawnError({ ...sender, targetAgentId: target.agentId })) &&
       resolveAcpAgentPolicyError(cfg, target.agentId) === null &&
       (subagentRequesterId === undefined ||
         resolveRequesterSpawnTargetPolicy({
@@ -136,7 +141,7 @@ export function describeAcpSpawnTargetParameter(
   const acceptedIds = Array.from(resolveConfiguredAcpHarnessIds(cfg))
     .filter((id) => isAccepted(id))
     .toSorted((a, b) => a.localeCompare(b));
-  if (hasAcpAgentAllowlist(cfg) || subagentRequesterId !== undefined) {
+  if (hasAcpAgentAllowlist(cfg) || subagentRequesterId !== undefined || senderRestricted) {
     return acceptedIds.length > 0
       ? `${describeTargetIdList("ACP harness id from", acceptedIds)} ${omitClause}`
       : `No ACP harness id is allowed. ${omitClause}`;
