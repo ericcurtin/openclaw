@@ -43,18 +43,9 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
   private readonly subscriptions = new SubscriptionsController(this);
   constructor() {
     super();
-    this.subscriptions.watch(
-      () => this.context?.gateway,
-      (gateway, notify) => gateway.subscribe(notify),
-    );
-    this.subscriptions.watch(
-      () => this.context?.config,
-      (config, notify) => config.subscribe(notify),
-    );
-    this.subscriptions.watch(
-      () => this.context?.theme,
-      (theme, notify) => theme.subscribe(notify),
-    );
+    this.subscriptions.watchStore(() => this.context?.gateway);
+    this.subscriptions.watchStore(() => this.context?.config);
+    this.subscriptions.watchStore(() => this.context?.theme);
   }
 
   static override styles = [
@@ -110,8 +101,7 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
         justify-content: center;
         color: var(--muted);
       }
-      .icon svg,
-      .icon img {
+      .icon svg {
         width: 16px;
         height: 16px;
       }

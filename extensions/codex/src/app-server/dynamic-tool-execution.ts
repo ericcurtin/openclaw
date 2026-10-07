@@ -377,7 +377,6 @@ export function toCodexDynamicToolProtocolResponse(
   };
 }
 
-/** Adds async-started progress details when a tool result continues out of band. */
 export function toCodexDynamicToolProgressResponse(
   response: CodexDynamicToolRuntimeResponse,
   protocolResponse: CodexDynamicToolCallResponse,
@@ -429,12 +428,6 @@ export function shouldReleaseTurnAfterTerminalDynamicTool(
     state.activeTurnItemIdsCount === 0 &&
     state.pendingOpenClawDynamicToolCompletionIdsCount === 0
   );
-}
-
-export function shouldBlockTerminalReleaseForNonTerminalDynamicToolResult(
-  response: CodexDynamicToolRuntimeResponse,
-): boolean {
-  return response.asyncStarted !== true;
 }
 
 type TerminalDynamicToolBatchAction =
