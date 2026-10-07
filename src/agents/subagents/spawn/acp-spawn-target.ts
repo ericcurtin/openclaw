@@ -95,13 +95,9 @@ export function resolveTargetAcpAgentId(params: {
 }
 
 function isExplicitlyAllowedAcpAgent(cfg: OpenClawConfig, agentId: string): boolean {
-  return (cfg.acp?.allowedAgents ?? []).some((entry) => {
-    if (entry.trim() === "*") {
-      return true;
-    }
-    const normalized = normalizeOptionalAgentId(entry);
-    return normalized === agentId;
-  });
+  return (cfg.acp?.allowedAgents ?? []).some(
+    (entry) => entry.trim() === "*" || normalizeOptionalAgentId(entry) === agentId,
+  );
 }
 
 /**
