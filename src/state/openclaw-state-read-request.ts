@@ -22,6 +22,7 @@ export function captureCommand(command: OpenClawStateReadCommand): OpenClawState
     command.type === "operatorApprovals.listCronGrants" ||
     command.type === "operatorApprovals.validateCronGrant" ||
     command.type === "acpSessions.metadata" ||
+    command.type === "sessionRows.sharedFacts" ||
     command.type === "githubPublication.knownPullRequestUrls" ||
     command.type === "githubRepository.knownPullRequestUrls" ||
     command.type === "workers.placementProjection"
@@ -242,6 +243,9 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   if (command.type === "workerPlacements.changeSnapshot") {
     return bytes + stringBytes(command.profileIds ?? []);
   }
+  if (command.type === "workers.placementEnvironmentOwner") {
+    return bytes + Buffer.byteLength(command.environmentId, "utf8");
+  }
   if (command.type === "tui.lastSession.read") {
     return bytes + Buffer.byteLength(command.stateKey, "utf8");
   }
@@ -262,6 +266,9 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
         (input.entry?.sessionStartedAt === undefined ? 0 : 8),
       bytes,
     );
+  }
+  if (command.type === "sessionRows.sharedFacts") {
+    return bytes + Buffer.byteLength(JSON.stringify(command.entries), "utf8");
   }
   if (command.type === "capture.readOnlyEvents") {
     return bytes + Buffer.byteLength(command.sessionId, "utf8") + 8;
@@ -478,7 +485,12 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
     );
   }
   if (command.type === "userProfiles.githubIdentity.cached") {
-    return bytes + Buffer.byteLength(command.email, "utf8") + 8;
+    return (
+      bytes +
+      ("login" in command
+        ? Buffer.byteLength(command.login, "utf8")
+        : Buffer.byteLength(command.email, "utf8") + 8)
+    );
   }
   if (
     command.type === "userProfiles.githubAttribution.resolve" ||
