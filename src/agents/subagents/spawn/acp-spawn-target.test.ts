@@ -156,6 +156,24 @@ describe("describeAcpSpawnTargetParameter", () => {
       ).toBe("No ACP harness id is allowed. agentId is required.");
     });
 
+    it("omits aliases whose requested id the sender check rejects", () => {
+      const aliased = {
+        acp: { allowedAgents: ["main"] },
+        agents: {
+          entries: {
+            main: {},
+            coder: { runtime: { type: "acp" as const, acp: { agent: "main" } } },
+          },
+        },
+      };
+      expect(
+        describeAcpSpawnTargetParameter(aliased, "main", {
+          ...sender,
+          workspaceDir: "/work",
+        }),
+      ).toBe("ACP harness id from: main. agentId is required.");
+    });
+
     it("keeps the unrestricted guidance when the sender is not restricted", () => {
       expect(
         describeAcpSpawnTargetParameter(cfg, undefined, {

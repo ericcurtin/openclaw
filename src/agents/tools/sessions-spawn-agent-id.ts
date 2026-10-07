@@ -33,8 +33,11 @@ export function describeSessionsSpawnAgentId(params: {
   if (!params.acpAvailable) {
     return native;
   }
-  // ACP spawn admission applies subagent target policy only to subagent requesters.
-  const subagentRequesterId = params.requesterIsSubagent ? requesterAgentId : undefined;
+  // ACP spawn admission applies subagent target policy to subagent and sender-restricted requesters.
+  const subagentRequesterId =
+    params.requesterIsSubagent || inheritedToolPolicySource === "sender"
+      ? requesterAgentId
+      : undefined;
   const acp = describeAcpSpawnTargetParameter(params.cfg, subagentRequesterId, {
     requesterAgentId,
     inheritedToolPolicySource,

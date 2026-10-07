@@ -245,4 +245,20 @@ export function registerSessionsSpawnInputTests({
       'tools.swarm.defaultAgentId ("planner") is not an allowed target',
     );
   });
+
+  it("applies requester target policy to sender-restricted top-level ACP guidance", () => {
+    registerAcpBackendForTest();
+    const config = {
+      acp: { defaultAgent: "main", allowedAgents: ["main"] },
+      agents: { entries: { main: { subagents: { requireAgentId: true } } } },
+    };
+    const description = createTool({
+      config,
+      workspaceDir: "/work",
+      inheritedToolPolicySource: "sender",
+    }).description;
+    expect(description).toContain(
+      'With runtime="acp": ACP harness id from: main. agentId is required.',
+    );
+  });
 }

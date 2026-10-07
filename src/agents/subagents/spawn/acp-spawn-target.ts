@@ -106,9 +106,9 @@ function isExplicitlyAllowedAcpAgent(cfg: OpenClawConfig, agentId: string): bool
 
 /**
  * Describe the sessions_spawn `agentId` parameter for `runtime="acp"`.
- * Pass `subagentRequesterId` when the requester is a subagent: ACP spawns then
- * also go through its requireAgentId and allowAgents policy. Pass `sender` to
- * apply the inherited sender restrictions ACP admission enforces.
+ * Pass `subagentRequesterId` when the requester is a subagent or sender-restricted:
+ * ACP spawns then also go through its requireAgentId and allowAgents policy. Pass
+ * `sender` to apply the inherited sender restrictions ACP admission enforces.
  */
 export function describeAcpSpawnTargetParameter(
   cfg: OpenClawConfig,
@@ -119,9 +119,18 @@ export function describeAcpSpawnTargetParameter(
   // Ask the real admission path so the text never advertises a rejected id.
   const isAccepted = (requestedAgentId?: string) => {
     const target = resolveTargetAcpAgentId({ requestedAgentId, cfg });
+    if (!target.ok) {
+      return false;
+    }
+    // The tool checks the requested id before ACP resolves it to a harness.
+    const senderTargetIds = requestedAgentId
+      ? [requestedAgentId, target.agentId]
+      : [target.agentId];
     return (
-      target.ok &&
-      (!sender || !resolveAcpSenderSpawnError({ ...sender, targetAgentId: target.agentId })) &&
+      (!sender ||
+        senderTargetIds.every(
+          (targetAgentId) => !resolveAcpSenderSpawnError({ ...sender, targetAgentId }),
+        )) &&
       resolveAcpAgentPolicyError(cfg, target.agentId) === null &&
       (subagentRequesterId === undefined ||
         resolveRequesterSpawnTargetPolicy({
