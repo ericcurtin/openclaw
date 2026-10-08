@@ -115,6 +115,25 @@ describe("sendCronAnnouncePayloadStrict", () => {
     },
   );
 
+  it.each([
+    ["no source session without a job session", undefined],
+    ["the job session as source", "agent:main:main"],
+  ])("commits the announce route with %s", async (_name, sessionKey) => {
+    const job = makeJob({ kind: "command", argv: ["/bin/echo", "report"] });
+    mocks.deliverOutboundPayloads.mockImplementationOnce(async (params) => {
+      params.onPayload?.({ text: "report", mediaUrls: [] });
+      return [{ channel: "telegram", messageId: "confirmed-message" }];
+    });
+    await send({
+      jobId: job.id,
+      target: { channel: "telegram", to: "123", sessionKey },
+      payload: { text: "report" },
+      completion: { job, runStartedAt: 1000, deliveryAttemptFence: null },
+    });
+    expect(mocks.ensureOutboundSessionEntry).toHaveBeenCalledOnce();
+    expect(mocks.ensureOutboundSessionEntry.mock.calls[0]?.[0]?.sourceSessionKey).toBe(sessionKey);
+  });
+
   it.each(["route", "transcript"] as const)(
     "preserves confirmed delivery when the optional %s lookup rejects",
     async (boundary) => {
