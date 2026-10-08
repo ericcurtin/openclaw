@@ -1,4 +1,3 @@
-// Resolves image-capable model metadata and credential-bound runtime auth.
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveCompletionModelAuth } from "../agents/completion-model-auth.js";
 import { resolveModelAsync } from "../agents/embedded-agent-runner/model.js";
