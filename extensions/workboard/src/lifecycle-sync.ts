@@ -192,6 +192,11 @@ export async function syncWorkboardAgentEnded(params: {
   now?: number;
   onMatched?: WorkboardLifecycleMatchHandler;
 }): Promise<number> {
+  // agent_end fires per attempt, so a failure may be followed by a fallback model.
+  // Final failures arrive through subagent_ended and the session sweep.
+  if (!params.event.success) {
+    return 0;
+  }
   const now = params.now ?? Date.now();
   return (
     await syncWorkboardLifecycleEvent({
@@ -201,7 +206,7 @@ export async function syncWorkboardAgentEnded(params: {
         runId: params.event.runId ?? params.context.runId,
       },
       observation: {
-        state: params.event.success ? "succeeded" : "failed",
+        state: "succeeded",
         sourceUpdatedAt: now,
       },
       now,

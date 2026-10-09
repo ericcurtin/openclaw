@@ -367,7 +367,7 @@ describe("Workboard gateway lifecycle sync", () => {
   });
 
   it.each([
-    ["agent:main:dashboard:incognito-agent-end", false, "blocked"],
+    ["agent:main:dashboard:incognito-agent-end", false, "running"],
     ["agent:main:dashboard:incognito-agent-end", true, "review"],
   ] as const)("settles %s after agent_end success=%s", async (sessionKey, success, status) => {
     const store = createWorkboardSqliteTestStore();
@@ -398,6 +398,34 @@ describe("Workboard gateway lifecycle sync", () => {
     if (sessionKey.includes("incognito-")) {
       expect(JSON.stringify(handler.mock.calls)).not.toContain("PRIVATE_");
     }
+  });
+
+  it("blocks a card from the session sweep once a failed agent_end run settles", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const sessionKey = "agent:main:dashboard:failed-run";
+    const card = await createLinkedCard(store, {
+      sessionKey,
+      runId: "run-failed",
+      execution: execution(sessionKey, "run-failed"),
+    });
+    await syncWorkboardAgentEnded({
+      store,
+      event: { runId: "run-failed", success: false },
+      context: { runId: "run-failed", sessionKey },
+      now: card.updatedAt + 1,
+    });
+    expect((await store.get(card.id))?.status).toBe("running");
+
+    await runSessionSweep({
+      store,
+      sessions: [{ key: sessionKey, status: "failed", updatedAt: card.updatedAt + 2 }],
+      now: card.updatedAt + 2,
+    });
+
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      status: "blocked",
+      execution: { status: "blocked" },
+    });
   });
 
   it("marks an inactive running session stale and clears it after recovery", async () => {
