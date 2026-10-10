@@ -367,7 +367,6 @@ describe("ChatComposerCapabilityHost", () => {
   });
 
   it("refetches effective tools each time Tool access is opened", async () => {
-    const host = new ChatComposerCapabilityHost(vi.fn());
     const context = createContext({ appliedConfigHash: "config-a", runtimeConfig: {} });
     context.gateway.snapshot.hello = gatewayHelloForMethods(["sessions.patch", "tools.effective"]);
     const beforeRun = { agentId: "main", groups: [], profile: "before-run" };
@@ -376,20 +375,32 @@ describe("ChatComposerCapabilityHost", () => {
     const state = createState();
     state.client = { request } as unknown as GatewayBrowserClient;
     const session = { key: "main" } as GatewaySessionRow;
-
-    host.props(context, state, session, "main").onOpenToolAccess?.("github");
-    await vi.waitFor(() => {
-      expect(host.props(context, state, session, "main").toolsEffectiveResult).toBe(beforeRun);
+    const menu = (toolAccessOpen = false) =>
+      host.props(context, state, session, "main", toolAccessOpen);
+    // The host notifies once a request settles and its result is published.
+    let published = deferred();
+    const host = new ChatComposerCapabilityHost(() => {
+      if (!menu().toolsEffectiveLoading) {
+        published.resolve();
+      }
     });
-    host.props(context, state, session, "main", true);
+    const openToolAccess = (times: number) => {
+      published = deferred();
+      for (let open = 0; open < times; open += 1) {
+        menu().onOpenToolAccess?.("github");
+      }
+      return published.promise;
+    };
+
+    await openToolAccess(1);
+    expect(menu().toolsEffectiveResult).toBe(beforeRun);
+    menu(true);
     expect(request).toHaveBeenCalledTimes(1);
 
-    host.props(context, state, session, "main").onOpenToolAccess?.("github");
-    host.props(context, state, session, "main").onOpenToolAccess?.("github");
-    await vi.waitFor(() => {
-      expect(host.props(context, state, session, "main").toolsEffectiveResult).toBe(afterRun);
-    });
+    const reopened = openToolAccess(2);
     expect(request).toHaveBeenCalledTimes(2);
+    await reopened;
+    expect(menu().toolsEffectiveResult).toBe(afterRun);
   });
 
   it("keeps the newest tools after connector configuration changes away and back", async () => {
