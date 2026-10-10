@@ -359,6 +359,32 @@ describe("ChatComposerCapabilityHost", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
+  it("refetches effective tools each time Tool access is opened", async () => {
+    const host = new ChatComposerCapabilityHost(vi.fn());
+    const context = createContext({ appliedConfigHash: "config-a", runtimeConfig: {} });
+    context.gateway.snapshot.hello = gatewayHelloForMethods(["sessions.patch", "tools.effective"]);
+    const beforeRun = { agentId: "main", groups: [], profile: "before-run" };
+    const afterRun = { agentId: "main", groups: [], profile: "after-run" };
+    const request = vi.fn().mockResolvedValueOnce(beforeRun).mockResolvedValueOnce(afterRun);
+    const state = createState();
+    state.client = { request } as unknown as GatewayBrowserClient;
+    const session = { key: "main" } as GatewaySessionRow;
+
+    host.props(context, state, session, "main").onOpenToolAccess?.("github");
+    await vi.waitFor(() => {
+      expect(host.props(context, state, session, "main").toolsEffectiveResult).toBe(beforeRun);
+    });
+    host.props(context, state, session, "main", true);
+    expect(request).toHaveBeenCalledTimes(1);
+
+    host.props(context, state, session, "main").onOpenToolAccess?.("github");
+    host.props(context, state, session, "main").onOpenToolAccess?.("github");
+    await vi.waitFor(() => {
+      expect(host.props(context, state, session, "main").toolsEffectiveResult).toBe(afterRun);
+    });
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps the newest tools after connector configuration changes away and back", async () => {
     const host = new ChatComposerCapabilityHost(vi.fn());
     const context = createContext({ appliedConfigHash: "config-a", runtimeConfig: {} });
