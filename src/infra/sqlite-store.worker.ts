@@ -1,6 +1,6 @@
 import { isPromise } from "node:util/types";
 import { deserialize, serialize } from "node:v8";
-import { parentPort } from "node:worker_threads";
+import { parentPort, workerData } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { routeLogsToStderr } from "../logging/console.js";
 import { flushLogger } from "../logging/logger.js";
@@ -66,6 +66,18 @@ let nativeCleanupFailure: OpenClawStateWorkerErrorPayload | undefined;
 let operationAdmission: { actor: number; context: SqliteWorkerOperationContext } | undefined;
 let nativeRuntimeAdmissionSent = false;
 
+async function loadBackendModule(moduleUrl: string, sourceLoaderUrl?: string): Promise<unknown> {
+  if (!sourceLoaderRegistered && sourceLoaderUrl) {
+    const loader: unknown = await import(sourceLoaderUrl);
+    if (!isRecord(loader) || typeof loader.register !== "function") {
+      throw new Error("SQLite source worker loader is unavailable");
+    }
+    loader.register();
+    sourceLoaderRegistered = true;
+  }
+  return import(moduleUrl);
+}
+
 function runWithActorFacts<T>(actor: number, operation: () => T): T {
   const context = stateContexts.get(actor);
   return context ? runWithSqliteWorkerStateContext(context, operation) : operation();
@@ -77,6 +89,17 @@ function runInActorContext<T>(actor: number, operation: () => T): T {
       ? withSqliteWorkerOperationAdmission(operationAdmission.context, operation)
       : operation(),
   );
+}
+
+function assertSynchronousResult(value: unknown, phase: string, beforeReject?: () => void): void {
+  if (isPromise(value) || (isRecord(value) && typeof value.then === "function")) {
+    beforeReject?.();
+    if (isPromise(value)) {
+      // Retirement owns the failure; consume rejection while native exit is joined.
+      void value.catch(() => {});
+    }
+    throw new Error(`SQLite worker ${phase} must remain synchronous`);
+  }
 }
 
 async function receive(request: SqliteWorkerRequest): Promise<void> {
@@ -118,15 +141,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
             const settlement: unknown = runInActorContext(request.actor, () => ({
               settlement: backend.assertSettled?.(),
             })).settlement;
-            if (
-              isPromise(settlement) ||
-              (isRecord(settlement) && typeof settlement.then === "function")
-            ) {
-              if (isPromise(settlement)) {
-                void settlement.catch(() => {});
-              }
-              throw new Error("SQLite worker settlement checks must remain synchronous");
-            }
+            assertSynchronousResult(settlement, "settlement checks");
             return backend.assertSettled !== undefined;
           };
           const settleCommand = (failure?: { error: unknown }) => {
@@ -153,15 +168,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
                 const cleanup: unknown = runInActorContext(request.actor, () => ({
                   cleanup: backend[SQLITE_WORKER_OPERATION_CLEANUP]?.(typedCommand),
                 })).cleanup;
-                if (
-                  isPromise(cleanup) ||
-                  (isRecord(cleanup) && typeof cleanup.then === "function")
-                ) {
-                  if (isPromise(cleanup)) {
-                    void cleanup.catch(() => {});
-                  }
-                  throw new Error("SQLite worker operation cleanup must remain synchronous");
-                }
+                assertSynchronousResult(cleanup, "operation cleanup");
                 assertSettled();
               }
             } catch (error) {
@@ -221,17 +228,12 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
           }
           executed = true;
           completeResult = true;
-          if (isPromise(value) || (isRecord(value) && typeof value.then === "function")) {
+          assertSynchronousResult(value, "operations", () => {
             retire = true;
             if (operationAdmission) {
               settleSqliteWorkerOperationContext(operationAdmission.context, "unknown");
             }
-            if (isPromise(value)) {
-              // Retirement owns the failure; consume rejection while native exit is joined.
-              void value.catch(() => {});
-            }
-            throw new Error("SQLite worker operations must remain synchronous");
-          }
+          });
           settleCommand();
         },
       );
@@ -304,15 +306,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       if (request.existingIdentity) {
         assertExistingDatabaseIdentity(request.databasePath, request.existingIdentity);
       }
-      if (!sourceLoaderRegistered && request.sourceLoaderUrl) {
-        const loader: unknown = await import(request.sourceLoaderUrl);
-        if (!isRecord(loader) || typeof loader.register !== "function") {
-          throw new Error("SQLite source worker loader is unavailable");
-        }
-        loader.register();
-        sourceLoaderRegistered = true;
-      }
-      const module: unknown = await import(request.moduleUrl);
+      const module = await loadBackendModule(request.moduleUrl, request.sourceLoaderUrl);
       const factoryName = request.existingIdentity
         ? "openExistingSqliteWorkerBackend"
         : "createSqliteWorkerBackend";
@@ -480,6 +474,20 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
   if (complete) {
     scheduleWorkerIdleGc();
   }
+}
+
+// Preparation has no actor, native locator, input, or admission grant.
+const runtimeData: unknown = workerData;
+if (isRecord(runtimeData) && runtimeData.sqliteRuntimePreparation !== undefined) {
+  const source = runtimeData.sqliteRuntimePreparation;
+  if (
+    !isRecord(source) ||
+    typeof source.moduleUrl !== "string" ||
+    (source.sourceLoaderUrl !== undefined && typeof source.sourceLoaderUrl !== "string")
+  ) {
+    throw new Error("SQLite runtime preparation is invalid");
+  }
+  await loadBackendModule(source.moduleUrl, source.sourceLoaderUrl);
 }
 
 // The broker sends one request at a time, including module initialization.

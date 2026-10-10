@@ -167,6 +167,8 @@ function beginImmediateTransaction(
 export type SqliteTransactionOptions = {
   /** Already-started BEGIN budget, carried between workers in the same process. */
   beginDeadlineNs?: bigint;
+  /** An outer owner handles nonblocking admission failures. */
+  beginLockFailureReporting?: "suppress";
   busyTimeoutMs?: number;
   databaseLabel?: string;
   /** Prepared identifiers and counts only; never transcript or session payloads. */
@@ -252,29 +254,41 @@ function logSlowTransactionHold(params: {
   });
 }
 
-function logSlowTransactionStep(params: {
-  beginAdmission?: SqliteBeginAdmissionDiagnostics;
-  db: DatabaseSync;
-  elapsedMs: number;
-  options?: SqliteTransactionOptions;
-  step: SqliteTransactionStep;
-}): void {
-  if (params.elapsedMs < slowBusyWaitThresholdMs(params.options)) {
+function logTransactionStep(
+  params: {
+    beginAdmission?: SqliteBeginAdmissionDiagnostics;
+    db: DatabaseSync;
+    elapsedMs: number;
+    options?: SqliteTransactionOptions;
+    step: SqliteTransactionStep;
+  },
+  failure?: { error: unknown },
+): void {
+  if (!failure && params.elapsedMs < slowBusyWaitThresholdMs(params.options)) {
     return;
   }
-  (params.options?.logger ?? transactionLog).warn("slow SQLite transaction step", {
-    async: false,
-    ...(params.options?.busyTimeoutMs !== undefined
-      ? { busyTimeoutMs: params.options.busyTimeoutMs }
-      : {}),
-    ...transactionDiagnosticLabels(params.db, params.options),
-    elapsedMs: params.elapsedMs,
-    isMainThread,
-    pid: process.pid,
-    step: params.step,
-    threadId,
-    ...(params.beginAdmission ? { beginAdmission: { ...params.beginAdmission } } : {}),
-  });
+  const sqliteErrcode = failure ? sqliteExtendedResultCode(failure.error) : undefined;
+  const sqlitePrimaryCode = failure ? sqlitePrimaryResultCode(failure.error) : undefined;
+  (params.options?.logger ?? transactionLog).warn(
+    failure ? "SQLite transaction lock wait failed" : "slow SQLite transaction step",
+    {
+      async: false,
+      ...(params.options?.busyTimeoutMs !== undefined
+        ? { busyTimeoutMs: params.options.busyTimeoutMs }
+        : {}),
+      ...transactionDiagnosticLabels(params.db, params.options),
+      ...(failure ? { code: sqliteErrorCode(failure.error) } : {}),
+      elapsedMs: params.elapsedMs,
+      ...(failure ? { failureKind: "lock-contention" } : {}),
+      isMainThread,
+      pid: process.pid,
+      ...(sqliteErrcode !== undefined ? { sqliteErrcode } : {}),
+      ...(sqlitePrimaryCode !== undefined ? { sqlitePrimaryCode } : {}),
+      step: params.step,
+      threadId,
+      ...(params.beginAdmission ? { beginAdmission: { ...params.beginAdmission } } : {}),
+    },
+  );
 }
 
 function execTimedTransactionStep(params: {
@@ -295,7 +309,7 @@ function execTimedTransactionStep(params: {
       params.db.exec(params.sql);
     }
     const elapsedMs = Date.now() - startedAt;
-    logSlowTransactionStep({
+    logTransactionStep({
       beginAdmission,
       db: params.db,
       elapsedMs,
@@ -305,26 +319,15 @@ function execTimedTransactionStep(params: {
     return elapsedMs;
   } catch (error) {
     const elapsedMs = Date.now() - startedAt;
-    if (isSqliteLockError(error) && shouldReportSqliteLockFailure(params.db)) {
-      const sqliteErrcode = sqliteExtendedResultCode(error);
-      const sqlitePrimaryCode = sqlitePrimaryResultCode(error);
-      (params.options?.logger ?? transactionLog).warn("SQLite transaction lock wait failed", {
-        async: false,
-        ...(params.options?.busyTimeoutMs !== undefined
-          ? { busyTimeoutMs: params.options.busyTimeoutMs }
-          : {}),
-        ...transactionDiagnosticLabels(params.db, params.options),
-        code: sqliteErrorCode(error),
-        elapsedMs,
-        failureKind: "lock-contention",
-        isMainThread,
-        pid: process.pid,
-        ...(sqliteErrcode !== undefined ? { sqliteErrcode } : {}),
-        ...(sqlitePrimaryCode !== undefined ? { sqlitePrimaryCode } : {}),
-        step: params.step,
-        threadId,
-        ...(beginAdmission ? { beginAdmission: { ...beginAdmission } } : {}),
-      });
+    if (
+      isSqliteLockError(error) &&
+      shouldReportSqliteLockFailure(params.db) &&
+      !(params.step === "begin" && params.options?.beginLockFailureReporting === "suppress")
+    ) {
+      logTransactionStep(
+        { beginAdmission, db: params.db, elapsedMs, options: params.options, step: params.step },
+        { error },
+      );
     }
     throw error;
   }
