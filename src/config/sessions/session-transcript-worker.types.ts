@@ -17,6 +17,7 @@ import type { SessionCostUsageCacheReadResult } from "../../infra/session-cost-u
 import type { SensitiveTextRedactionSnapshot } from "../../logging/redact.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { OpenClawRegisteredAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
+import type { OpenClawAgentDatabaseReadValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import type { VoiceSessionMatch } from "../../talk/client-voice-session-store.js";
 import type {
   TrajectoryRetentionWorkerInput,
@@ -66,7 +67,6 @@ import type { SessionTranscriptWatermark } from "./session-accessor.sqlite-trans
 import type {
   SessionAccessScope,
   SessionEntryReadScope,
-  SessionEntrySummary,
   SessionTranscriptReadScope,
 } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
@@ -405,6 +405,11 @@ export type SessionTranscriptWorkerInput =
   | SessionEntryWorkerInput
   | SessionResetRecallWorkerInput;
 
+/** Only the dispatch owner attaches live physical proof; caller-prepared inputs cannot supply it. */
+export type SessionTranscriptWorkerRequest = SessionTranscriptWorkerInput & {
+  validation?: OpenClawAgentDatabaseReadValidation;
+};
+
 type SessionHistoryDatabaseWorkerInput = Extract<SessionHistoryWorkerInput, { database: unknown }>;
 
 type PreparedHistoryInput<Input> = Input extends unknown ? Omit<Input, "database"> : never;
@@ -637,7 +642,7 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
       SessionArchivePruningWorkerInput,
       PublishedSessionTranscriptArchive[]
     >;
-    readColdMetadata: SessionHistoryReader<SessionColdMetadataWorkerInput>;
+    readColdMetadata: CancellableSessionHistoryReader<SessionColdMetadataWorkerInput>;
     readRuntimeTarget: SessionHistoryReader<
       SessionRuntimeTargetWorkerInput,
       SessionTranscriptWorkerValues["session-runtime-target"]["target"]
@@ -683,7 +688,8 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
       scope: SessionEntryListWorkerInput["scope"],
       continuation?: CanonicalSessionReaderContinuation,
       expectedIdentity?: SessionEntryListWorkerInput["expectedIdentity"],
-    ) => Promise<SessionEntrySummary[]>;
+      ifRevision?: string,
+    ) => Promise<SessionEntryListWorkerResult>;
     readStoreSummary: SessionHistoryReader<
       SessionStoreSummaryWorkerInput,
       SessionTranscriptWorkerValues["session-store-summary"]["summary"]

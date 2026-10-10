@@ -43,8 +43,10 @@ Same-turn steering is the default. A prompt that arrives mid-run is injected int
 
 - `steer`: inject messages into the active runtime, including while it is executing tools. OpenClaw lets the first executable call of an assistant message start before steering can skip its unstarted sequential tail. Running tools finish, and parallel batches never skip calls for steering. After each batch settles, OpenClaw checks steering before stop hooks and makes it visible after the tool results, before the next model decision. Codex app-server receives one batched `turn/steer` and applies it at the next model boundary. If steering is unavailable, OpenClaw waits until the active run ends before starting the prompt.
 - `followup`: do not steer. Enqueue each message for a later agent turn after the current run ends.
-- `collect`: do not steer. Coalesce queued messages into a **single** followup turn after the quiet window. If messages target different channels/threads, they drain individually to preserve routing.
+- `collect`: do not steer. Coalesce compatible queued messages into a **single** followup turn after the quiet window. Messages must share routing, authorization, and execution settings and must not have distinct exclusive admission lifecycles.
 - `interrupt`: abort the active run for that session, then run the newest message. This cancellation does not resume the old turn through Gateway restart recovery.
+
+Messages from channels using durable ingress admission, including Discord and Telegram, keep separate followup turns: `collect` behaves like `followup` there. Each message owns an exclusive admission lifecycle so one source cannot commit before another rejects a combined turn. Compatible Gateway `chat.send` inputs use non-exclusive lifecycles and can still collect.
 
 For runtime-specific timing and dependency behavior, see [Steering queue](/concepts/queue-steering). For the explicit `/steer <message>` command, see [Steer](/tools/steer).
 
@@ -215,6 +217,7 @@ The Control UI **System busyness** overlay and `diagnostics.lanes` report this w
 ## Troubleshooting
 
 - If commands seem stuck, enable verbose logs and look for "queued for ...ms" lines to confirm the queue is draining.
+- In `lane wait exceeded`, `activeAhead` counts active tasks when the entry was queued; `activeNow` counts them immediately before it starts. `activeAhead=1 activeNow=0` can mean the preceding task just finished, even after a long wait. It does not establish a leaked slot. Admission failures and completed tasks release their slots and drain queued successors even when diagnostics throw; `lane task diagnostics failed after settlement` identifies a task whose completion logging failed after its caller settled.
 - Codex app-server runs that accept a turn and then stop emitting progress are interrupted by the Codex adapter so the active session lane can release instead of waiting for the outer run timeout.
 - When diagnostics are enabled, sessions that remain in `processing` past the built-in warning threshold with no observed reply, tool, status, block, or ACP progress are classified by current activity:
   - Active work with recent progress logs as `session.long_running`. Owned silent model calls also stay `session.long_running` until the built-in abort threshold so slow or non-streaming providers are not reported as stalled too early.
