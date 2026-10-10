@@ -26,8 +26,8 @@ requests. On Discord and Telegram, it also keeps the current operation and
 delegated task status visible without a detailed tool log or utility model.
 Intermediate tool failures and nonzero command exits stay out of the draft.
 Set `streaming.progress.toolProgress: true` to add a rolling tool log,
-including tool failures, with rows such as `Bash: run tests`. Telegram
-prefixes each tool row with a text glyph for its tool, such as
+including tool failures, with rows such as `Bash: run tests`. Discord and
+Telegram prefix each tool row with a text glyph for its tool, such as
 `📖 Read: from docs/index.md`; other channels keep plain rows. Channel plugins opt in
 through the `toolIcons` option of `createChannelProgressDraftCompositor`.
 
@@ -304,6 +304,10 @@ by default and does not bypass the normal activity gate for short turns;
 enabling `streaming.progress.commentary` hands preambles to the interleaved
 commentary lane instead.
 
+On Telegram, `/verbose on` and `/verbose full` keep this temporary preamble
+headline while sending tool diagnostics separately. The preamble is not copied
+into the final answer.
+
 On Discord, when a utility model resolves for the agent — an explicit
 [`utilityModel`](/gateway/config-agents/models#agents-defaults-model), or the primary
 provider's declared small-model default (OpenAI → `gpt-5.6-luna`,
@@ -385,6 +389,8 @@ the draft is edited, and OpenClaw truncates long lines so repeated draft edits
 do not wrap differently on every update. The default per-line budget is 120
 characters; prose cuts at a word boundary, while long details such as paths or
 raw commands are shortened with a middle ellipsis so the suffix stays visible.
+The same budget applies to prepared tool titles, including paths embedded in a
+Read title, rather than only to separate tool details.
 
 Tune the per-line budget:
 
