@@ -1,3 +1,6 @@
+// Install synthetic OAuth and subprocess transport before RPC modules load.
+// oxfmt-ignore
+import { network, resetPersonalGitHubNetwork, tokens } from "./users-github.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { StatementSync } from "node:sqlite";
@@ -17,6 +20,7 @@ import {
 } from "../../agents/github-tool-identity.js";
 import { cleanupRetiredManagedGitHubProfiles } from "../../agents/github-tool-profile-cleanup.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withPluginRuntimePluginScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { resolveCommandEnv } from "../../process/exec-spawn.js";
 import * as secretsRuntime from "../../secrets/runtime-state.js";
 import {
@@ -29,9 +33,10 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { dumpGitBackupDatabase } from "../../snapshot/git-backup-codec.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as stateLease from "../../state/openclaw-state-lease.js";
+import { observeUserGitHubConnectionAuthority } from "../../state/user-github-connection-events.js";
 import {
   observeUserGitHubProfileRetirement,
-  readUserGitHubConnection,
+  readUserGitHubConnectionAsync,
   resolvePersonalGitHubOwner,
 } from "../../state/user-github-connections.js";
 import {
@@ -39,7 +44,9 @@ import {
   expireUserGitHubAuthorization,
   updateUserGitHubConnection,
 } from "../../state/user-github-connections.test-support.js";
+import type { UserGitHubConnectionCommit } from "../../state/user-github-connections.types.js";
 import { getUserProfileListItem } from "../../state/user-profile-list-item.test-support.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { linkCanonicalUserProfileEmail } from "../../state/user-profile-writes.js";
 import { linkEmail, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -53,36 +60,11 @@ import { createGitHubOAuthLifecycle } from "../github-oauth-lifecycle.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
+import {
+  expectReceiptBackedPersonalGitHubAuthority,
+  preparePersonalGitHubPoll,
+} from "./users-github.authority.test-support.js";
 
-const network = vi.hoisted(() => ({
-  assertCli: vi.fn(),
-  start: vi.fn(),
-  poll: vi.fn(),
-  refresh: vi.fn(),
-  verify: vi.fn<typeof import("../../agents/github-oauth-client.js").verifyGitHubCredential>(),
-  command: vi.fn(),
-}));
-vi.mock("../../agents/github-oauth-client.js", () => ({
-  clearGitHubCredentialVerificationCache: vi.fn(),
-  requestGitHubOAuthDeviceCode: network.start,
-  pollGitHubOAuthDeviceToken: network.poll,
-  refreshGitHubOAuthToken: network.refresh,
-  verifyGitHubCredential: network.verify,
-}));
-vi.mock("../../process/exec.js", () => ({ runCommandBuffered: network.command }));
-vi.mock("../github-cli-preflight.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../github-cli-preflight.js")>();
-  return { ...actual, assertGitHubCliAvailable: network.assertCli };
-});
-
-const tokens = {
-  accessToken: "synthetic-access",
-  tokenType: "bearer" as const,
-  scopes: ["gist", "read:org", "repo", "workflow"],
-  expiresInSeconds: 28800,
-  refreshToken: "synthetic-refresh",
-  refreshTokenExpiresInSeconds: 15552000,
-};
 let state: OpenClawTestState;
 let lifecycle: ReturnType<typeof createGitHubOAuthLifecycle>;
 let config: OpenClawConfig;
@@ -90,6 +72,7 @@ let clients: Set<GatewayClient>;
 let context: GatewayRequestContext;
 let alice: GatewayClient;
 let bob: GatewayClient;
+let profileCatalog: Awaited<ReturnType<typeof prepareUserProfileCatalog>>;
 
 function user(email: string, scopes = ["operator.read"]): GatewayClient {
   const profile = ensureProfileForEmail(email);
@@ -133,23 +116,14 @@ async function start(client = alice): Promise<UsersGitHubAuthorizeStartResult> {
   return respond.mock.calls[0]![1] as UsersGitHubAuthorizeStartResult;
 }
 function preparePoll(client = alice) {
-  updateUserGitHubConnection(
-    owner(client),
-    (current) => {
-      if (current?.pending?.kind !== "device") {
-        throw new Error("Expected pending device authorization");
-      }
-      return { ...current, pending: { ...current.pending, nextPollAtMs: Date.now() } };
-    },
-    () => {},
-  );
+  preparePersonalGitHubPoll(owner(client));
 }
 async function connect(client = alice) {
   const started = await start(client);
   preparePoll(client);
   const result = await rpc(client, "users.github.authorize.poll", { requestId: started.requestId });
   expect(result.mock.calls[0]?.[1]).toMatchObject({ status: "success" });
-  return readUserGitHubConnection(owner(client))!;
+  return (await readUserGitHubConnectionAsync(owner(client)))!;
 }
 
 beforeEach(async () => {
@@ -158,55 +132,8 @@ beforeEach(async () => {
   clients = new Set();
   alice = user("alice@example.test");
   bob = user("bob@example.test");
-  network.assertCli.mockReset();
-  network.start.mockReset().mockResolvedValue({
-    deviceCode: "d".repeat(40),
-    userCode: "ABCD-1234",
-    verificationUri: "https://github.com/login/device",
-    expiresInSeconds: 900,
-    intervalSeconds: 5,
-  });
-  network.poll.mockReset().mockResolvedValue({ status: "authorized", tokens });
-  network.refresh.mockReset().mockResolvedValue({
-    status: "refreshed",
-    tokens: {
-      ...tokens,
-      accessToken: "synthetic-rotated-access",
-      refreshToken: "synthetic-rotated-refresh",
-    },
-  });
-  network.verify.mockReset().mockImplementation(async (token) => {
-    const native = token === "synthetic-native";
-    if (
-      !native &&
-      ![tokens.accessToken, "synthetic-rotated-access", "new-access"].includes(token)
-    ) {
-      return { status: "unavailable" };
-    }
-    return {
-      status: "available",
-      account: {
-        accountId: native ? 303 : 101,
-        login: native ? "system-bot" : "personal-alice",
-        avatarUrl: null,
-      },
-      scopes: [],
-    };
-  });
-  vi.stubGlobal(
-    "fetch",
-    vi.fn().mockRejectedValue(new Error("Unexpected credential HTTP request")),
-  );
-  network.command.mockReset().mockImplementation(async (argv: string[]) => {
-    if (argv[0] === "gh" && argv.join(" ") !== "gh auth token --hostname github.com") {
-      throw new Error("Unexpected GitHub CLI operation");
-    }
-    return {
-      code: argv[0] === "git" ? 1 : 0,
-      stdout: Buffer.from(argv[0] === "gh" ? "synthetic-native\n" : ""),
-      stderr: Buffer.alloc(0),
-    };
-  });
+  profileCatalog = await prepareUserProfileCatalog();
+  resetPersonalGitHubNetwork();
   lifecycle = createGitHubOAuthLifecycle({
     scheduler: createTestGatewayScheduler(),
     getConfig: () => config,
@@ -225,11 +152,21 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await lifecycle.stop();
+  profileCatalog.release();
   await state.cleanup();
   vi.unstubAllGlobals();
 });
 
 describe("personal GitHub through authenticated Gateway RPC", () => {
+  it("uses committed profile authority at the effect without host reads", async () => {
+    await expectReceiptBackedPersonalGitHubAuthority({
+      client: alice,
+      context,
+      merge: () => linkEmail("alice@example.test", owner(bob)),
+      disconnect: () => clients.delete(alice),
+    });
+  });
+
   it.each(["users.github.status", "tools.github.status"])(
     "%s reports execution authentication instead of a resolved preview credential",
     async (method) => {
@@ -326,7 +263,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     },
   );
 
-  it("starts and cancels personal authorization without writing SQLite on the Gateway thread", async () => {
+  it("keeps RPC writes off the Gateway thread and legacy completion synchronous", async () => {
     await start();
     const writes = vi.spyOn(StatementSync.prototype, "run");
     try {
@@ -337,6 +274,36 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
       expect(writes).not.toHaveBeenCalled();
     } finally {
       writes.mockRestore();
+    }
+    const pending = await start();
+    const action = { owner: owner(), assertCurrent: () => {} };
+    const publications: UserGitHubConnectionCommit[] = [];
+    const unobserve = observeUserGitHubConnectionAuthority((commit) => publications.push(commit));
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    try {
+      await withPluginRuntimePluginScope(
+        { pluginId: "personal-github-legacy-service-test" },
+        async () => {
+          expect(lifecycle.personal.cancelAuthorization(action, pending.requestId)).toBe(true);
+          expect(publications).toHaveLength(1);
+          expect((await readUserGitHubConnectionAsync(owner()))?.pending).toBeUndefined();
+          expect(lifecycle.personal.cancelAuthorization(action, pending.requestId)).toBe(false);
+          expect(publications).toHaveLength(1);
+          const previous = (await readUserGitHubConnectionAsync(owner()))?.generation;
+          expect(lifecycle.personal.disconnect(action)).toBeUndefined();
+          expect(publications).toHaveLength(2);
+          const disconnected = await readUserGitHubConnectionAsync(owner());
+          expect(disconnected?.generation).not.toBe(previous);
+          expect(disconnected?.selection).toEqual({ kind: "disconnected" });
+        },
+      );
+      expect(warning).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("personal.cancelAuthorizationAsync"),
+        { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
+      );
+    } finally {
+      unobserve();
+      warning.mockRestore();
     }
   });
 
@@ -352,7 +319,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
       "GitHub CLI (`gh`) is required on the Gateway host. Install it and retry.",
     );
     expect(network.start).not.toHaveBeenCalled();
-    expect(readUserGitHubConnection(owner())).toBeUndefined();
+    expect(await readUserGitHubConnectionAsync(owner())).toBeUndefined();
   });
 
   it.each(["disconnect", "role"] as const)(
@@ -464,11 +431,11 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
         });
         expect(response.mock.calls[0]?.[0]).toBe(true);
         const { requestId } = response.mock.calls[0]![1] as { requestId: string };
-        const pending = readGitHubDeviceAuthorizationRecord(requestId);
+        const pending = await readGitHubDeviceAuthorizationRecord(requestId);
         if (!pending) {
           throw new Error("Expected shared device authorization");
         }
-        writeGitHubDeviceAuthorizationRecord({ ...pending, nextPollAtMs: Date.now() });
+        await writeGitHubDeviceAuthorizationRecord({ ...pending, nextPollAtMs: Date.now() });
         const polled = await rpc(alice, "tools.github.authorize.poll", { requestId });
         expect(polled.mock.calls[0]?.[1]).toMatchObject({ status: "success" });
       }
@@ -537,15 +504,17 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
       );
     }
     const restarted = await start();
-    expect(readUserGitHubConnection(owner())?.generation).toBe(connection.generation);
+    expect((await readUserGitHubConnectionAsync(owner()))?.generation).toBe(connection.generation);
     expect(
       await rpc(alice, "users.github.authorize.cancel", { requestId: restarted.requestId }),
     ).toHaveBeenCalledWith(true, { cancelled: true });
     expect(await rpc(alice, "users.github.disconnect")).toHaveBeenCalledWith(true, {
       disconnected: true,
     });
-    expect(readUserGitHubConnection(owner())?.selection.kind).toBe("disconnected");
-    expect(readUserGitHubConnection(owner())?.generation).not.toBe(connection.generation);
+    expect((await readUserGitHubConnectionAsync(owner()))?.selection.kind).toBe("disconnected");
+    expect((await readUserGitHubConnectionAsync(owner()))?.generation).not.toBe(
+      connection.generation,
+    );
   });
 
   it("preserves personal scope order and repairs corrupt state only on explicit disconnect", async () => {
@@ -562,14 +531,18 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
       JSON.stringify({ ...connected, selection: { ...connected.selection, refreshToken: null } }),
       owner(),
     );
-    expect(() => readUserGitHubConnection(owner())).toThrow("Personal GitHub state is invalid");
+    await expect(readUserGitHubConnectionAsync(owner())).rejects.toThrow(
+      "Personal GitHub state is invalid",
+    );
     await expect(lifecycle.personal.refresh(owner())).rejects.toThrow(
       "Personal GitHub state is invalid",
     );
     expect(await rpc(alice, "users.github.disconnect")).toHaveBeenCalledWith(true, {
       disconnected: true,
     });
-    expect(readUserGitHubConnection(owner())?.selection).toEqual({ kind: "disconnected" });
+    expect((await readUserGitHubConnectionAsync(owner()))?.selection).toEqual({
+      kind: "disconnected",
+    });
   });
 
   it("rejects copied pending IDs before lookup, deduplication, or cancellation", async () => {
@@ -609,7 +582,9 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
       expect.objectContaining({ personal: expect.objectContaining({ state: "disconnected" }) }),
     );
     const started = await start(alice);
-    expect(readUserGitHubConnection(profile.id)?.pending?.requestId).toBe(started.requestId);
+    expect((await readUserGitHubConnectionAsync(profile.id))?.pending?.requestId).toBe(
+      started.requestId,
+    );
   });
 
   it.each([
@@ -688,9 +663,9 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
       waiting.resolve({ status: "authorized", tokens });
       const response = await pending;
       expect(response.mock.calls[0]?.[1]).not.toMatchObject({ status: "success" });
-      expect(readUserGitHubConnection(resolvePersonalGitHubOwner(owner())!)?.selection.kind).toBe(
-        "disconnected",
-      );
+      expect(
+        (await readUserGitHubConnectionAsync(resolvePersonalGitHubOwner(owner())!))?.selection.kind,
+      ).toBe("disconnected");
       expect(network.command.mock.calls.some(([argv]) => argv[1] === "auth")).toBe(false);
     },
   );
@@ -710,7 +685,9 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
       intervalSeconds: 5,
     });
     expect((await pending).mock.calls[0]?.[0]).toBe(false);
-    expect(readUserGitHubConnection(owner())?.pending?.requestId).toBe(newer.requestId);
+    expect((await readUserGitHubConnectionAsync(owner()))?.pending?.requestId).toBe(
+      newer.requestId,
+    );
   });
 
   it.each(["cancel", "disconnect", "expiry"] as const)(
@@ -738,7 +715,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
         (await rpc(alice, "users.github.authorize.poll", { requestId: started.requestId })).mock
           .calls[0]?.[1],
       ).not.toMatchObject({ status: "success" });
-      expect(readUserGitHubConnection(owner())?.selection.kind).toBe("disconnected");
+      expect((await readUserGitHubConnectionAsync(owner()))?.selection.kind).toBe("disconnected");
     },
   );
 
@@ -752,11 +729,19 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
       if (target === "connected") {
         await connect(bob);
       }
-      const previousTarget = readUserGitHubConnection(owner(bob));
+      const previousTarget = await readUserGitHubConnectionAsync(owner(bob));
       await start();
       const retired: string[] = [];
       const observedOwners: Array<string | undefined> = [];
+      const authorityOwners: Array<string | undefined> = [];
+      const authoritySeenAtRetirement: number[] = [];
+      const publications: UserGitHubConnectionCommit[] = [];
+      const unobserveAuthority = observeUserGitHubConnectionAuthority((publication) => {
+        authorityOwners.push(resolvePersonalGitHubOwner(owner()));
+        publications.push(publication);
+      });
       const unobserve = observeUserGitHubProfileRetirement((ids) => {
+        authoritySeenAtRetirement.push(publications.length);
         observedOwners.push(resolvePersonalGitHubOwner(owner()));
         retired.push(...ids);
       });
@@ -764,6 +749,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
         await linkCanonicalUserProfileEmail("alice@example.test", owner(bob));
       } finally {
         unobserve();
+        unobserveAuthority();
       }
       expect(retired).toEqual(
         target === "absent" || source.selection.kind !== "connected"
@@ -771,11 +757,23 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
           : [source.selection.profileId],
       );
       expect(observedOwners).toEqual(target === "absent" ? [] : [owner(bob)]);
-      const merged = readUserGitHubConnection(owner(bob));
+      expect(authorityOwners).toEqual([owner(bob)]);
+      expect(authoritySeenAtRetirement).toEqual(target === "absent" ? [] : [1]);
+      const merged = await readUserGitHubConnectionAsync(owner(bob));
       expect(merged?.selection).toEqual((previousTarget ?? source).selection);
       expect(merged?.pending).toBeUndefined();
       expect(merged?.generation).not.toBe(source.generation);
       expect(merged?.generation).not.toBe(previousTarget?.generation);
+      expect(publications).toEqual([
+        {
+          kind: "user-github-connection",
+          databasePath: openOpenClawStateDatabase().path,
+          changedOwners: [owner(), owner(bob)],
+          retiredProfileIds: retired,
+        },
+      ]);
+      expect(JSON.stringify(publications)).not.toContain(tokens.accessToken);
+      expect(JSON.stringify(publications)).not.toContain(tokens.refreshToken);
     },
   );
 
@@ -794,7 +792,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
       }
       expect(() => linkEmail("alice@example.test", owner(bob))).not.toThrow();
       expect(resolvePersonalGitHubOwner(owner())).toBe(owner(bob));
-      const merged = readUserGitHubConnection(owner(bob));
+      const merged = await readUserGitHubConnectionAsync(owner(bob));
       expect(merged?.selection).toEqual(
         corrupt === "source" ? target!.selection : { kind: "disconnected" },
       );
@@ -814,23 +812,27 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     );
     db.exec("DROP TRIGGER reject_personal_merge");
     expect(resolvePersonalGitHubOwner(owner())).toBe(owner());
-    expect(readUserGitHubConnection(owner())).toEqual(before);
-    expect(readUserGitHubConnection(owner(bob))).toBeUndefined();
+    expect(await readUserGitHubConnectionAsync(owner())).toEqual(before);
+    expect(await readUserGitHubConnectionAsync(owner(bob))).toBeUndefined();
   });
 
   it("does not adopt credentials stranded on an alias by an older profile merge", async () => {
     await connect();
+    profileCatalog.release();
     openOpenClawStateDatabase()
       .db.prepare("UPDATE user_profiles SET merged_into = ? WHERE id = ?")
       .run(owner(bob), owner());
+    profileCatalog = await prepareUserProfileCatalog();
     expect((await rpc(alice, "users.github.status")).mock.calls[0]?.[1]).toMatchObject({
       personal: { state: "disconnected", account: null },
     });
     await lifecycle.personal.maintain();
-    expect(readUserGitHubConnection(owner(bob))).toBeUndefined();
+    expect(await readUserGitHubConnectionAsync(owner(bob))).toBeUndefined();
+    profileCatalog.release();
     openOpenClawStateDatabase()
       .db.prepare("DELETE FROM user_profiles WHERE id = ?")
       .run(owner(bob));
+    profileCatalog = await prepareUserProfileCatalog();
     expect((await rpc(alice, "users.github.authorize.start")).mock.calls[0]?.[0]).toBe(false);
   });
 
@@ -848,8 +850,8 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     expect((await fs.stat(dir)).mode & 0o077).toBe(0);
     expect(await listSecretStoreEntries({ scope: { kind: "team" } })).toEqual([]);
     expect(await readSecretStoreExecEnvironment({ includeSecretSentinels: true })).toEqual({});
-    expect(listGitHubOAuthRecords()).toEqual([]);
-    expect(listGitHubDeviceAuthorizationRecords()).toEqual([]);
+    expect(await listGitHubOAuthRecords()).toEqual([]);
+    expect(await listGitHubDeviceAuthorizationRecords()).toEqual([]);
     await purgeExpiredSecretStoreEntries();
     await cleanupRetiredManagedGitHubProfiles({ config });
     expect(await fs.readFile(path.join(dir, "hosts.yml"), "utf8")).toContain(tokens.accessToken);
@@ -874,7 +876,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
       await lifecycle.personal.maintain();
       expect(lease).not.toHaveBeenCalled();
       expect(network.refresh).not.toHaveBeenCalled();
-      expect(readUserGitHubConnection(owner())).toEqual(connection);
+      expect(await readUserGitHubConnectionAsync(owner())).toEqual(connection);
     } finally {
       lease.mockRestore();
     }
@@ -909,7 +911,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
         await lifecycle.personal.refresh(owner());
         expect(lease).toHaveBeenCalled();
         expect(network.refresh).not.toHaveBeenCalled();
-        expect(readUserGitHubConnection(owner())).toEqual(current);
+        expect(await readUserGitHubConnectionAsync(owner())).toEqual(current);
       } finally {
         lease.mockRestore();
       }
@@ -933,17 +935,21 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
       tokens: { ...tokens, accessToken: "new-access", refreshToken: "new-refresh" },
     });
     await expect(pending).rejects.toThrow();
-    expect(readUserGitHubConnection(owner(bob))?.selection).toMatchObject({
+    expect((await readUserGitHubConnectionAsync(owner(bob)))?.selection).toMatchObject({
       profileId: connection.selection.profileId,
       refreshToken: "new-refresh",
       refresh: { tokens: { accessToken: "new-access" } },
     });
-    expect(readUserGitHubConnection(owner(bob))?.generation).not.toBe(connection.generation);
+    expect((await readUserGitHubConnectionAsync(owner(bob)))?.generation).not.toBe(
+      connection.generation,
+    );
     await lifecycle.personal.refresh(owner(bob));
-    expect(readUserGitHubConnection(owner(bob))?.selection).toMatchObject({
+    expect((await readUserGitHubConnectionAsync(owner(bob)))?.selection).toMatchObject({
       refreshToken: "new-refresh",
     });
-    expect(readUserGitHubConnection(owner(bob))?.selection).not.toHaveProperty("refresh");
+    expect((await readUserGitHubConnectionAsync(owner(bob)))?.selection).not.toHaveProperty(
+      "refresh",
+    );
     expect(network.refresh).toHaveBeenCalledOnce();
   });
 
@@ -958,11 +964,11 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     const pending = lifecycle.personal.refresh(owner());
     await vi.waitFor(() => expect(network.refresh).toHaveBeenCalledOnce());
     await rpc(alice, "users.github.disconnect");
-    const generation = readUserGitHubConnection(owner())?.generation;
+    const generation = (await readUserGitHubConnectionAsync(owner()))?.generation;
     refresh.resolve({ status: "refreshed", tokens });
     await pending;
     await lifecycle.personal.maintain();
-    expect(readUserGitHubConnection(owner())).toMatchObject({
+    expect(await readUserGitHubConnectionAsync(owner())).toMatchObject({
       generation,
       selection: { kind: "disconnected" },
     });
@@ -987,7 +993,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
       }
       await lifecycle.personal.maintain();
       expect(network.refresh).toHaveBeenCalledOnce();
-      expect(readUserGitHubConnection(owner())?.selection).toMatchObject(
+      expect((await readUserGitHubConnectionAsync(owner()))?.selection).toMatchObject(
         disconnect
           ? { kind: "disconnected" }
           : { kind: "connected", refreshToken: "synthetic-rotated-refresh" },
@@ -1013,7 +1019,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     });
     await pending;
     await stop;
-    expect(readUserGitHubConnection(owner())).toMatchObject({
+    expect(await readUserGitHubConnectionAsync(owner())).toMatchObject({
       generation: connection.generation,
       selection: { refreshToken: "shutdown-rotated" },
     });

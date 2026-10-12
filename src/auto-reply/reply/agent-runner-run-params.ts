@@ -102,6 +102,7 @@ export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateC
   const { turn } = params;
   return {
     preparedTtsPreferences: turn.opts?.preparedTtsPreferences,
+    awaitSessionDiffBaseline: turn.opts?.awaitSessionDiffBaseline,
     preparedRunAdmission: params.preparedRunAdmission,
     messageActionTurnCapability: params.messageActionTurnCapability,
     trigger: resolveReplyRunTrigger(turn),
@@ -111,6 +112,8 @@ export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateC
     fastModeStartedAtMs: params.fastModeStartedAtMs,
     fastModeAutoProgressState: params.fastModeAutoProgressState,
     isFinalFallbackAttempt: params.isFinalFallbackAttempt,
+    resolvedModelSelection: params.resolvedModelSelection,
+    modelFallbacksOverride: params.modelFallbacksOverride,
     prompt: turn.commandBody,
     transcriptPrompt: turn.transcriptCommandBody,
     media: turn.followupRun.media,

@@ -25,10 +25,11 @@ import { isDeliveredCurrentSourceReplyAsync } from "../../infra/outbound/source-
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { getPreparedMessageToolCatalog } from "../../plugins/prepared-message-tool-catalog.js";
-import { withPreparedChannelReadAuthority } from "../../shared/channel-read-authority.js";
+import { withChannelReadAuthority } from "../../shared/channel-read-authority.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import * as embeddedMessageDelivery from "../embedded-agent-message-delivery.js";
 import { createSandboxBridgeReadFile } from "../sandbox-media-paths.js";
+import { captureAgentWorkspaceReadiness } from "../workspace-readiness.js";
 import { type AnyAgentTool, jsonResult, readToolStringParam } from "./common.js";
 import { captureGatewayToolCallerAssertion } from "./gateway-caller-context.js";
 import {
@@ -41,6 +42,7 @@ import {
   type MessageToolDiscoveryParams,
   resolveAgentAccountId,
   resolveEffectiveCurrentChannelContext,
+  resolveEffectiveCurrentChannelContextForRequest,
   resolveMessageToolActionSchemaActions,
   resolveMessageToolDiscoveryAsync,
 } from "./message-tool-discovery.js";
@@ -103,6 +105,9 @@ function* createMessageToolSteps(
   AnyAgentTool,
   Awaited<ReturnType<typeof resolveMessageToolDiscoveryAsync>>
 > {
+  const workspaceReadiness = captureAgentWorkspaceReadiness(
+    options?.runSessionKey ?? options?.agentSessionKey,
+  );
   const loadConfigForTool = options?.getRuntimeConfig ?? getRuntimeConfig;
   const getScopedSecretTargetsForTool =
     options?.getScopedChannelsCommandSecretTargets ?? getScopedChannelsCommandSecretTargets;
@@ -159,6 +164,7 @@ function* createMessageToolSteps(
           currentMessageId: options.currentMessageId,
           currentPromptReaction: turnAuthority.hasCurrentPromptReaction,
           currentAccountId: agentAccountId,
+          isScheduledRun: turnAuthority.isScheduledRun,
           scheduledAccountScope: turnAuthority.scheduledAccountScope,
           sessionKey: options.agentSessionKey,
           sessionId: options.sessionId,
@@ -239,13 +245,16 @@ function* createMessageToolSteps(
       } = turnAuthority.beginInvocation(action);
       const messageActionAuthorization: MessageActionAuthorization = trustedTurnContext ?? {};
       const requestedAccountId = readToolStringParam(params, "accountId");
-      const effectiveCurrentChannel = resolveEffectiveCurrentChannelContext(options, {
-        config: rawConfig,
-        action,
-        params,
-        accountId: requestedAccountId ?? agentAccountId,
-        preparedMessageToolCatalog,
-      });
+      const effectiveCurrentChannel = await resolveEffectiveCurrentChannelContextForRequest(
+        options,
+        {
+          config: rawConfig,
+          action,
+          params,
+          accountId: requestedAccountId ?? agentAccountId,
+          preparedMessageToolCatalog,
+        },
+      );
       const decisions = createMessageToolDecisionRecorder({
         actionId: toolCallId,
         action,
@@ -547,11 +556,7 @@ function* createMessageToolSteps(
         action === "send" &&
         sourceReplySinkDeliveryMode === "message_tool_only" &&
         normalizeOptionalString(trustedTurnContext?.toolContext?.currentSourceTurnId) !== undefined;
-      const prepareUse = messageActionAuthorization.scheduled?.prepareUse;
-      return await withPreparedChannelReadAuthority(
-        prepareUse
-          ? () => prepareUse(Boolean(scheduledRead || scheduledWrite), assertActionCurrent)
-          : undefined,
+      return await withChannelReadAuthority(
         action === "download-file" || scheduledRead || assertDashboardReadCurrent
           ? assertActionCurrent
           : undefined,
@@ -577,6 +582,7 @@ function* createMessageToolSteps(
                 senderIsOwner: options?.senderIsOwner,
                 conversationReadOrigin: options?.conversationReadOrigin,
                 workspaceDir: options?.workspaceDir,
+                workspaceReadiness,
                 broadcastAccountPlan,
                 gateway,
                 toolContext,

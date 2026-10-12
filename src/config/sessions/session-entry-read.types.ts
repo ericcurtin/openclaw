@@ -15,7 +15,7 @@ import type {
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import type { SessionColdArchive } from "./session-cold-storage-state.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
-import type { SessionEntrySnapshotField } from "./session-entry-snapshots.js";
+import type { SessionEntrySnapshotField } from "./session-entry-snapshot-values.js";
 import type { SessionMember } from "./session-membership-facts.types.js";
 import type {
   SessionSourcePredicate,
@@ -85,6 +85,18 @@ export type SessionExactEntriesWorkerSelection =
       sessionKeys?: never;
       selection: { kind: "session-id"; sessionId: string; orderBy?: "updatedAt" };
       projection: "sharing" | "full";
+    }
+  | {
+      sessionKeys?: never;
+      selection: { kind: "children"; parentSessionKeys: readonly string[] };
+      projection: "list" | "full";
+    }
+  | {
+      sessionKeys?: never;
+      selection:
+        | { kind: "session-id-or-key"; sessionIdOrKey: string }
+        | { kind: "label"; label: string };
+      projection: "list";
     };
 
 export type SessionExactEntriesWorkerRequest = SessionExactEntriesWorkerSelection & {
@@ -102,6 +114,11 @@ export type SessionExactEntriesWorkerRequest = SessionExactEntriesWorkerSelectio
   replacementSelection?: SessionEntryReplacementSelection;
   creationLabel?: string;
   continuation?: CanonicalSessionReaderContinuation;
+  transcript?: Omit<SessionTranscriptAnchorSelection, "afterSeq" | "includeMessagesForRunId"> & {
+    sessionKey: string;
+    /** Captured logical owner; the executor still selects the physical database. */
+    agentId?: string;
+  };
 };
 
 /** Bounded foreground facts read through an already admitted session executor. */
@@ -112,6 +129,7 @@ export type SessionEntryCohortRequest = Pick<
   | "includeMembers"
   | "includeParticipantRecords"
   | "lifecycleSessionKey"
+  | "transcript"
 > & {
   sessionKeys: readonly string[];
   includeAuthProfileSource?: boolean;
@@ -125,11 +143,6 @@ export type SessionEntryCohortRequest = Pick<
       sessionId: string;
       lifecycleRevision: string | undefined;
     }[];
-  };
-  transcript?: Omit<SessionTranscriptAnchorSelection, "afterSeq" | "includeMessagesForRunId"> & {
-    sessionKey: string;
-    /** Captured logical owner; the executor still selects the physical database. */
-    agentId?: string;
   };
 };
 

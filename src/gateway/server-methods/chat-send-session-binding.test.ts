@@ -349,7 +349,17 @@ it.each(admissionScenarios)(
         }
         if (closure !== "queued") {
           await upsertSessionEntryCore(scope, { sessionId: "late-session", updatedAt: Date.now() });
-          await userTurn.persist();
+          if (membershipRequired) {
+            // The pre-ACK commit survives revocation; replay cannot append to the successor.
+            await expect(userTurn.persist()).resolves.toMatchObject({
+              admission: { sessionId: binding.sessionId, sessionKey },
+              message: { role: "user", content: "Keep this user turn in its session" },
+            });
+          } else if (closure === "released") {
+            await expect(userTurn.persist()).rejects.toThrow("Chat input actor admission ended");
+          } else {
+            await userTurn.persist();
+          }
           expect(
             await loadTranscriptEvents({
               ...scope,
@@ -629,7 +639,7 @@ it.each(
           identityLabel: "Human",
           expectedSessionId: sessionId,
         });
-        const before = listSessionReactions(scope, { sessionId });
+        const before = await listSessionReactions(scope, { sessionId });
         expect(before[messageId]).toEqual([
           { emoji: "👍", count: 1, identities: [{ id: profile.id, label: "Human" }] },
         ]);
@@ -656,7 +666,7 @@ it.each(
         if (outcome === "allowed") {
           expect((await react()).details).toMatchObject({ messageId, changed: true });
           expect(commitRequests).toBeGreaterThan(0);
-          expect(listSessionReactions(scope, { sessionId })[messageId]).toEqual([
+          expect((await listSessionReactions(scope, { sessionId }))[messageId]).toEqual([
             {
               emoji: "👍",
               count: 2,
@@ -688,7 +698,7 @@ it.each(
           } else {
             expect(preparationRevoked).toBe(true);
           }
-          expect(listSessionReactions(scope, { sessionId })).toEqual(before);
+          expect(await listSessionReactions(scope, { sessionId })).toEqual(before);
           expect(broadcast.mock.calls.filter(([event]) => event === "session.reaction")).toEqual(
             [],
           );
@@ -696,7 +706,7 @@ it.each(
         probe.mockRestore();
         if (outcome === "allowed") {
           await react({ remove: true });
-          expect(listSessionReactions(scope, { sessionId })).toEqual(before);
+          expect(await listSessionReactions(scope, { sessionId })).toEqual(before);
         }
         expect(external).not.toHaveBeenCalled();
       } finally {

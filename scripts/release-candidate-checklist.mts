@@ -118,13 +118,15 @@ const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/u;
 const RELEASE_CANDIDATE_STATE_VERSION = 2;
 const RELEASE_CANDIDATE_STATE_FILE = "release-candidate-state.json";
 const TRUSTED_TOOLING_SHA_ENV = "OPENCLAW_RELEASE_CANDIDATE_TRUSTED_TOOLING_SHA";
+// Release tooling (toolingSha and its publishWorkflowRef tag) is not candidate
+// identity: each run re-verifies the current tooling against trusted main, and
+// saved FRV/npm evidence is authenticated against its own producer run. Tooling
+// repaired mid-release can therefore resume the same state.
 const RELEASE_CANDIDATE_STATE_KEYS = [
   "repo",
   "tag",
   "targetSha",
-  "toolingSha",
   "workflowRef",
-  "publishWorkflowRef",
   "provider",
   "mode",
   "releaseProfile",
@@ -163,7 +165,7 @@ Options:
   --tag <tag>                         Release tag. An existing tag must resolve to the target SHA.
   --target-sha <sha>                  Frozen release SHA. Defaults to the current HEAD.
   --workflow-ref <ref>                Trusted helper/publisher source (P), not the candidate harness. Default: main.
-  --workflow-sha <sha>                Trusted helper/publisher SHA (P); reuses or mints its release-publish tag. Fresh qualification runs Q=C.
+  --workflow-sha <sha>                Trusted helper/publisher SHA (P), a trusted-main commit, not the candidate; reuses or mints its release-publish tag. Fresh qualification runs Q=C.
   --publish-workflow-ref <tag>         Protected publication tooling tag matching the trusted helper checkout.
   --publication-route <normal|prepared>
                                       Intended publication route. Default: normal; not inferred from a protected ref.
@@ -378,21 +380,29 @@ export function parseArgs(argv: string[]) {
 export function run(
   command: string,
   args: string[],
-  options: { capture?: boolean; cwd?: string; env?: NodeJS.ProcessEnv } = {},
+  options: { capture?: boolean | "echo"; cwd?: string; env?: NodeJS.ProcessEnv } = {},
 ) {
   const result = spawnSync(command, args, {
     cwd: options.cwd,
     encoding: "utf8",
     env: options.env ? { ...process.env, ...options.env } : process.env,
-    maxBuffer: COMMAND_CAPTURE_MAX_BUFFER_BYTES,
+    ...(options.capture === "echo" ? {} : { maxBuffer: COMMAND_CAPTURE_MAX_BUFFER_BYTES }),
     stdio: options.capture ? ["ignore", "pipe", "pipe"] : "inherit",
   });
+  if (options.capture === "echo") {
+    if (result.stdout) {
+      process.stdout.write(result.stdout);
+    }
+    if (result.stderr) {
+      process.stderr.write(result.stderr);
+    }
+  }
   if (result.status !== 0) {
     throw new Error(
       `${command} ${args.join(" ")} failed with ${result.status ?? result.signal}\n${result.stderr ?? ""}`,
     );
   }
-  return result.stdout ?? "";
+  return `${result.stdout ?? ""}${options.capture === "echo" ? (result.stderr ?? "") : ""}`;
 }
 
 function readJson(path: string, label: string) {
@@ -741,7 +751,18 @@ function runFromTrustedTooling(
       workflowSha !== trustedToolingSha &&
       !gitIsAncestor(workflowSha, "refs/remotes/origin/main", targetRoot)
     ) {
-      throw new Error(`--workflow-sha ${workflowSha} is not reachable from trusted ${workflowRef}`);
+      // P runs admission, protected-tag creation, and publication with release
+      // credentials, so it must be reviewed trusted-main code (RELEASING.md,
+      // "Frozen qualification identity"). The candidate is selected separately.
+      const candidateHead = run("git", ["rev-parse", "HEAD"], {
+        capture: true,
+        cwd: targetRoot,
+      }).trim();
+      throw new Error(
+        `--workflow-sha ${workflowSha} is not reachable from trusted ${workflowRef}.${
+          workflowSha === candidateHead ? " It is the checked-out release candidate." : ""
+        } --workflow-sha pins the release tooling that runs with release credentials, so it must be a commit on trusted ${workflowRef}; the candidate comes from the checkout or --target-sha. Pass a trusted ${workflowRef} commit (for example \`git rev-parse origin/${workflowRef}\`), or land the tooling repair on ${workflowRef} first.`,
+      );
     }
     trustedToolingSha = workflowSha;
   }
@@ -905,23 +926,13 @@ export function assertReleaseCandidateTag(tag: string, targetSha: string, cwd: s
   }
 }
 
-function savedPublishWorkflowRef(
-  statePath: string,
-  toolingSha: string,
-  hasRetainedRequest: boolean,
-) {
+function savedPublishWorkflowRef(statePath: string, toolingSha: string) {
   if (!existsSync(statePath)) {
     return "";
   }
   const saved = readJson(statePath, "release candidate state");
   if (saved.version !== RELEASE_CANDIDATE_STATE_VERSION) {
     throw new Error("release candidate state has an unsupported schema");
-  }
-  if (saved.toolingSha !== toolingSha) {
-    if (!canUpdateReleaseCandidateState(saved, hasRetainedRequest)) {
-      throw new Error("release candidate state mismatch for toolingSha");
-    }
-    return "";
   }
   const tag = saved.publishWorkflowRef;
   return typeof tag === "string" &&
@@ -948,7 +959,7 @@ function gitIsAncestor(ancestor: string, target: string, cwd = process.cwd()) {
     return false;
   }
   throw new Error(
-    `could not validate changelog provenance ${ancestor}..${target}: ${
+    `could not check git ancestry ${ancestor}..${target}: ${
       result.stderr?.trim() || result.signal || result.status
     }`,
   );
@@ -1313,27 +1324,6 @@ async function resolveRunArtifact(
   return artifact;
 }
 
-function runAndEcho(command: string, args: string[]) {
-  const result = spawnSync(command, args, {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  if (result.stdout) {
-    process.stdout.write(result.stdout);
-  }
-  if (result.stderr) {
-    process.stderr.write(result.stderr);
-  }
-  if (result.status !== 0) {
-    throw new Error(
-      `${command} ${args.join(" ")} failed with ${result.status ?? result.signal}\n${
-        result.stderr ?? ""
-      }`,
-    );
-  }
-  return `${result.stdout ?? ""}${result.stderr ?? ""}`;
-}
-
 function runLocalGeneratedCheckIfNeeded(options: ReturnType<typeof parseArgs>): LocalCheckResult {
   if (options.skipLocalGeneratedCheck) {
     return { status: "skipped", reason: "operator skipped --skip-local-generated-check" };
@@ -1431,7 +1421,7 @@ function dispatchWorkflow(
   for (const [key, value] of Object.entries(fields)) {
     args.push("-f", `${key}=${String(value)}`);
   }
-  return requireRunIdFromDispatchOutput(runAndEcho("gh", args), workflowFile);
+  return requireRunIdFromDispatchOutput(run("gh", args, { capture: "echo" }), workflowFile);
 }
 
 async function runInfo(repo: string, runId: string) {
@@ -2119,10 +2109,10 @@ async function main() {
         `--workflow-sha ${options.workflowSha} does not match tooling checkout ${toolingSha}`,
       );
     }
-    // A resumed candidate keeps the exact tag it recorded; a newer tag at the
-    // same SHA must not fail state reconciliation. The identity check below
-    // still proves that saved tag resolves to this tooling SHA.
-    const savedTag = savedPublishWorkflowRef(statePath, toolingSha, hasRetainedRequest);
+    // A resumed candidate reuses the tag it recorded for this tooling SHA; a
+    // repaired tooling SHA gets its own tag. The identity check below proves
+    // the selected tag resolves to this tooling SHA.
+    const savedTag = savedPublishWorkflowRef(statePath, toolingSha);
     const ensured = savedTag
       ? { tag: savedTag, created: false }
       : ensureReleasePublishToolingTag({
