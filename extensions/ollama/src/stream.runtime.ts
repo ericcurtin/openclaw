@@ -48,14 +48,13 @@ import {
   createOllamaVisibleContentSanitizer,
   sanitizeOllamaFinalVisibleContent,
 } from "./sanitizers/visible-content.js";
-import { appendOllamaResponseText } from "./stream-commentary.js";
 import {
   type OllamaThinkValue,
   resolveOllamaConfiguredNumCtx,
   resolveOllamaConfiguredThink,
   supportsNativeOllamaMax,
 } from "./stream-compat.js";
-import { OLLAMA_INCOMPLETE_STREAM_ERROR } from "./stream-contract.js";
+import { OLLAMA_INCOMPLETE_STREAM_ERROR, resolveOllamaStopReason } from "./stream-contract.js";
 import {
   convertToOllamaMessages,
   type OllamaChatMessage,
@@ -347,18 +346,6 @@ function estimateTokensFromChars(chars: number): number {
   return Math.max(1, Math.round(chars / CHARS_PER_TOKEN_ESTIMATE));
 }
 
-function resolveOllamaStopReason(response: OllamaChatResponse) {
-  // Ollama's length terminal means generation hit its token limit, even when
-  // the partial response already contains a complete-looking tool call.
-  if (response.done_reason === "length") {
-    return "length" as const;
-  }
-  if (response.message.tool_calls?.length) {
-    return "toolUse" as const;
-  }
-  return "stop" as const;
-}
-
 function estimateOllamaPromptTokens(params: {
   messages: OllamaChatMessage[];
   tools: OllamaTool[];
@@ -438,7 +425,6 @@ export function buildAssistantMessage(
   options: OllamaAssistantMessageBuildOptions = {},
 ): AssistantMessage {
   const content: (TextContent | ThinkingContent | ToolCall)[] = [];
-  const stopReason = resolveOllamaStopReason(response);
   const thinking =
     modelInfo.reasoning === false
       ? ""
@@ -454,7 +440,9 @@ export function buildAssistantMessage(
           modelId: modelInfo.id,
           text: rawText,
         });
-  appendOllamaResponseText(content, text, stopReason);
+  if (text) {
+    content.push({ type: "text", text });
+  }
 
   const toolCalls = response.message.tool_calls;
   if (toolCalls && toolCalls.length > 0) {
@@ -486,7 +474,7 @@ export function buildAssistantMessage(
   return buildStreamAssistantMessage({
     model: modelInfo,
     content,
-    stopReason,
+    stopReason: resolveOllamaStopReason(response),
     usage: {
       ...createEmptyTransportUsage(),
       input: promptTokens - (cacheRead ?? 0),
@@ -981,13 +969,16 @@ function createRawOllamaStreamFn(
               stream.push({ type: "toolcall_start", contentIndex, partial: buildPartial() });
               // Replace the placeholder instead of mutating it: queued start
               // snapshots must not see arguments before their delta arrives.
-              streamedToolCalls[streamedToolCalls.length - 1] = completedToolCall;
+              const partialJson = JSON.stringify(completedToolCall.arguments);
+              const streamingCall = { ...completedToolCall, partialJson };
+              streamedToolCalls[streamedToolCalls.length - 1] = streamingCall;
               stream.push({
                 type: "toolcall_delta",
                 contentIndex,
-                delta: JSON.stringify(completedToolCall.arguments),
+                delta: partialJson,
                 partial: buildPartial(),
               });
+              streamedToolCalls[streamedToolCalls.length - 1] = completedToolCall;
               stream.push({
                 type: "toolcall_end",
                 contentIndex,
