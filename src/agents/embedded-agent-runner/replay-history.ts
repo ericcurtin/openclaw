@@ -287,6 +287,37 @@ function isBareDeliveryMirrorDuplicate(out: AgentMessage[], next: AssistantRepla
   );
 }
 
+// A speech-only reply keeps its words in delivery facts and leaves the visible
+// text empty, so replay would otherwise drop the whole turn. Memory copy only.
+function projectSpokenReplyContent(message: AssistantReplayMessage): AssistantReplayMessage {
+  const spoken = message.openclawDelivery?.tts?.text;
+  const content: unknown = message.content;
+  if (!spoken?.trim() || !Array.isArray(content)) {
+    return message;
+  }
+  const blocks = content.map(asOptionalRecord);
+  if (
+    blocks.some(
+      (block) =>
+        block?.type === "toolCall" ||
+        (block?.type === "text" && typeof block.text === "string" && block.text.trim()),
+    )
+  ) {
+    return message;
+  }
+  const projected = [...content];
+  const textIndex = blocks.findIndex((block) => block?.type === "text");
+  projected[textIndex < 0 ? projected.length : textIndex] = {
+    ...blocks[textIndex],
+    type: "text",
+    text: spoken,
+  };
+  return replaceCompactionReplayOwnerContent(
+    message,
+    projected as AssistantReplayMessage["content"],
+  );
+}
+
 function normalizeAssistantReplayMessage(
   message: AssistantReplayMessage,
   out: AgentMessage[],
@@ -306,7 +337,8 @@ function normalizeAssistantReplayMessage(
   ) {
     return null;
   }
-  const replayContent = (message as { content?: unknown }).content;
+  const spokenMessage = projectSpokenReplyContent(message);
+  const replayContent = (spokenMessage as { content?: unknown }).content;
   if (typeof replayContent === "string") {
     const strippedText = stripInternalMetadataForDisplay(replayContent);
     const trimmed = strippedText.trim();
@@ -321,7 +353,7 @@ function normalizeAssistantReplayMessage(
       : [];
   const assistantMessage =
     blockContent === replayContent
-      ? message
+      ? spokenMessage
       : replaceCompactionReplayOwnerContent(message, blockContent as typeof message.content);
   const normalized = normalizeAssistantReplayBlockContent(assistantMessage, blockContent);
   // Token-limited thinking is incomplete provider state. Replaying it can

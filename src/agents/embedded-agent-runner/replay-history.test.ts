@@ -1,7 +1,9 @@
 // Coverage for normalizing assistant replay content before provider requests.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
+import { convertMessages } from "../../../packages/ai/src/openai-completions-messages.js";
 import { transformMessages } from "../../../packages/ai/src/transcript-transform.js";
+import { resolveOpenAICompletionsCompat } from "../../../packages/ai/src/transports/openai-completions-compat.js";
 import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../../shared/transcript-only-openclaw-assistant.js";
@@ -131,6 +133,53 @@ describe("normalizeAssistantReplayContent", () => {
       ]);
     },
   );
+
+  it("replays a speech-only assistant turn as its spoken text", () => {
+    const model = makeProviderModelFixture({
+      id: "test-model",
+      api: "openai-completions",
+      provider: "custom-openai-compatible",
+      baseUrl: "https://proxy.example/v1",
+    });
+    const speech = {
+      ...bedrockAssistant(
+        [
+          { type: "thinking", thinking: "plan the reply", thinkingSignature: "reasoning_content" },
+          { type: "text", text: "" },
+        ],
+        "stop",
+        { output: 5, totalTokens: 5 },
+      ),
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      openclawDelivery: { tts: { tagged: true, text: "Done, it is sent." } },
+    } as unknown as Extract<AgentMessage, { role: "assistant" }>;
+
+    const normalized = normalizeAssistantReplayContent([
+      userMessage("send it"),
+      speech,
+      userMessage("heartbeat"),
+    ]);
+    const converted = convertMessages(
+      model as Parameters<typeof convertMessages>[0],
+      { messages: normalized } as Parameters<typeof convertMessages>[1],
+      resolveOpenAICompletionsCompat(model as Parameters<typeof convertMessages>[0]),
+    );
+
+    expect(converted.map((message) => message.role)).toEqual(["user", "assistant", "user"]);
+    expect(converted[1]?.content).toBe("Done, it is sent.");
+    const written = {
+      ...speech,
+      content: [{ type: "text", text: "Written answer" }],
+    } as unknown as AgentMessage;
+    const withText = [userMessage("send it"), written];
+    expect(normalizeAssistantReplayContent(withText)).toBe(withText);
+    expect(speech.content).toEqual([
+      { type: "thinking", thinking: "plan the reply", thinkingSignature: "reasoning_content" },
+      { type: "text", text: "" },
+    ]);
+  });
 
   it("removes persisted attachment display blocks before model replay", () => {
     const damaged = bedrockAssistant(
