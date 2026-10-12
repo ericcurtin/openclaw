@@ -953,6 +953,32 @@ describe("message mutation retries", () => {
     expect(mocks[mock]).toHaveBeenCalledTimes(2);
   });
 
+  it.each(mutations)("stops the $name retry when the caller aborts during backoff", async (m) => {
+    vi.useFakeTimers();
+    try {
+      const mocks = makeDiscordRest();
+      mocks[m.mock].mockRejectedValue(Object.assign(new Error("bad gateway"), { status: 502 }));
+      const controller = new AbortController();
+      const reason = new Error("caller aborted");
+      const settled = expect(
+        m.run({
+          ...discordClientOpts(mocks.rest),
+          retry: { attempts: 3, minDelayMs: 1_000, maxDelayMs: 1_000, jitter: 0 },
+          signal: controller.signal,
+        }),
+      ).rejects.toBe(reason);
+
+      await vi.advanceTimersByTimeAsync(0);
+      controller.abort(reason);
+      await vi.advanceTimersByTimeAsync(5_000);
+      await settled;
+      expect(mocks[m.mock]).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("treats Unknown Message as deleted after a lost delete response", async () => {
     const { rest, deleteMock } = makeDiscordRest();
     deleteMock.mockRejectedValueOnce(lostResponse).mockRejectedValueOnce(unknownMessage);
