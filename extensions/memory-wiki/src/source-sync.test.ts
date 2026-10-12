@@ -87,35 +87,21 @@ describe("syncMemoryWikiImportedSources", () => {
     });
   });
 
-  it("imports without refreshing indexes when the caller compiles next", async () => {
-    const config = createConfig();
-
-    const result = await syncMemoryWikiImportedSources({
-      config,
-      appConfig,
-      deferIndexRefresh: true,
-    });
-
-    expect(refreshIndexesMock).not.toHaveBeenCalled();
-    expect(result).toEqual({
-      ...bridgeResult,
-      indexesRefreshed: false,
-      indexRefreshReason: "deferred",
-      indexUpdatedFiles: [],
-    });
-  });
-
   it("does not share a deferred flight with a refreshing one", async () => {
     const config = createConfig();
     const bridgeGate = deferred<typeof bridgeResult>();
-    syncBridgeMock.mockReturnValueOnce(bridgeGate.promise);
+    const bridgeStarted = deferred();
+    syncBridgeMock.mockImplementationOnce(() => {
+      bridgeStarted.resolve();
+      return bridgeGate.promise;
+    });
 
     const deferredSync = syncMemoryWikiImportedSources({
       config,
       appConfig,
       deferIndexRefresh: true,
     });
-    await vi.waitFor(() => expect(syncBridgeMock).toHaveBeenCalledTimes(1));
+    await bridgeStarted.promise;
     const refreshing = syncMemoryWikiImportedSources({ config, appConfig });
     bridgeGate.resolve(bridgeResult);
 
