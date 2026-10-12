@@ -75,6 +75,7 @@ policy does not wrap arbitrary Git commands run by agents or setup scripts.
 
 - Retries on rate-limit errors (HTTP 429), request timeouts, HTTP 5xx responses, and transient transport failures such as DNS lookup failures, connection resets, socket closes, and fetch failures.
 - Uses Discord `retry_after` when available, otherwise exponential backoff.
+- If an error response body cannot be read, the received HTTP status and rate-limit headers still govern retries. Permanent `401`, `403`, and `404` refusals are not retried.
 
 ### Telegram
 
@@ -96,6 +97,11 @@ The embedded runtime's existing session setting `retry.provider.maxRetries` over
 - Composite flows do not retry completed steps.
 
 ### Durable outbound delivery
+
+The Gateway checks for unfinished outbound deliveries once at startup. New
+durable enqueues wake recovery after their database transaction commits. Recovery
+keeps retrying while unfinished deliveries remain and stops waking when the queue
+is empty; an idle Gateway does not poll an empty outbound queue.
 
 The durable outbound queue has a separate delivery-attempt budget. When a
 delivery uses a producer claim, reservation checks the exact owner and its lease

@@ -37,6 +37,14 @@ const {
   unwrapSecretSentinelsForProviderEgressMock,
 } = imageRuntimeMocks;
 
+// OpenAI route selection reads the agent auth store; these tests do not exercise it.
+vi.mock("../agents/auth-profiles/store-runtime.js", async () => ({
+  ...(await vi.importActual<typeof import("../agents/auth-profiles/store-runtime.js")>(
+    "../agents/auth-profiles/store-runtime.js",
+  )),
+  ensureAuthProfileStoreAsync: async () => ({ version: 1, profiles: {} }),
+}));
+
 const requireRecord = createRequireRecord("record", "expected-label-capitalized");
 const {
   describeImageWithModelCore,

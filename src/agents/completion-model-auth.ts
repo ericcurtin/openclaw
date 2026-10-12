@@ -2,7 +2,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
+import { ensureAuthProfileStoreAsync } from "./auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { reconcileAuthProfileQuotaBlocks } from "./auth-profiles/usage.js";
 import { resolveProviderModelAuthPolicy } from "./model-auth-policy.js";
@@ -54,7 +54,7 @@ export async function resolveCompletionModelAuth(params: {
   const authStore =
     params.authStore ??
     (params.bindAuthOwner || initialModel.provider === "openai"
-      ? ensureAuthProfileStore(params.agentDir, {
+      ? await ensureAuthProfileStoreAsync(params.agentDir, {
           readOnly: true,
           allowKeychainPrompt: false,
           config: params.cfg,
