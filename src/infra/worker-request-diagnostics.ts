@@ -10,9 +10,46 @@ import type { WorkerRequestKind } from "./worker-request-kind.js";
 
 export type WorkerRequestObservation = { started(): void; completed(): void };
 
+// Exact owner commands only: SDK callers may supply private suffixes.
+const sessionCommands = new Set([
+  "session.actor.read",
+  "session.actor.acceptInput",
+  "session.actor.adoptRun",
+  "session.actor.appendToolResult",
+  "session.actor.appendTranscriptEvent",
+  "session.actor.completeTurn",
+  "session.actor.deliveryPending",
+  "session.actor.deliverySettled",
+  "session.actor.patch",
+  "session.entry.read",
+  "session.entry.patch.prepare",
+  "session.entry.patch.commit",
+  "session.entry.replacements.prepare",
+  "session.entry.replacements.commit",
+  "session.lifecycle.project",
+  "session.maintenance.read",
+  "session.pendingInputs.read",
+  "session.pendingInputs.mutate",
+  "session.turn.prepare",
+  "session.turn.commit",
+]);
+
+const requestPrefixes = [
+  ["pluginState.", "plugin_state"],
+  ["session.history.", "transcript_read"],
+  ["trajectory.", "transcripts"],
+  ["session.transcript.", "transcripts"],
+  ["transcripts.", "transcripts"],
+  ["session.", "sessions"],
+  ["cron.", "cron"],
+] as const;
+
 export function classifyWorkerRequest(commandType: PropertyKey): string {
   if (typeof commandType !== "string") {
     return "execute";
+  }
+  if (sessionCommands.has(commandType)) {
+    return commandType;
   }
   if (commandType === "auth-profile-rows") {
     return "auth_profiles";
@@ -20,23 +57,12 @@ export function classifyWorkerRequest(commandType: PropertyKey): string {
   if (commandType === "database.domain.execute") {
     return "domain_execute";
   }
-  if (commandType.startsWith("pluginState.")) {
-    return "plugin_state";
+  for (const [prefix, requestClass] of requestPrefixes) {
+    if (commandType.startsWith(prefix)) {
+      return requestClass;
+    }
   }
-  if (commandType.startsWith("session.history.")) {
-    return "transcript_read";
-  }
-  if (
-    commandType.startsWith("trajectory.") ||
-    commandType.startsWith("session.transcript.") ||
-    commandType.startsWith("transcripts.")
-  ) {
-    return "transcripts";
-  }
-  if (commandType.startsWith("session.")) {
-    return "sessions";
-  }
-  return commandType.startsWith("cron.") ? "cron" : classifySqliteWorkerExecute(commandType);
+  return classifySqliteWorkerExecute(commandType);
 }
 
 const queued = resolveGlobalSingleton(
@@ -45,17 +71,14 @@ const queued = resolveGlobalSingleton(
 );
 
 const requestClasses = new Set([
+  ...sessionCommands,
   ...sqliteWorkerRequestClasses,
+  ...requestPrefixes.map(([, requestClass]) => requestClass),
   "task",
   "open",
   "close",
   "execute",
-  "transcript_read",
-  "cron",
-  "sessions",
-  "transcripts",
   "domain_execute",
-  "plugin_state",
   "auth_profiles",
 ]);
 
