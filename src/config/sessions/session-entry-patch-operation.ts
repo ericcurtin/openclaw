@@ -3,6 +3,11 @@ import {
   projectAmbientTranscriptWatermark,
   type AmbientTranscriptWatermarkUpdate,
 } from "./ambient-transcript-watermark-projection.js";
+import {
+  projectLastRoutePatch,
+  projectSessionMetaPatch,
+  type PreparedSessionMetaPatch,
+} from "./metadata-projection.js";
 import { buildRestartRecoveryClaimCleanupPatch } from "./restart-recovery-state.js";
 import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
 import { projectCompactionAccountingPatch } from "./session-entry-projection.js";
@@ -12,11 +17,6 @@ import {
   projectSessionEntryUsageUpdate,
   type SessionEntryUsageUpdate,
 } from "./session-entry-usage.js";
-import type {
-  SessionTranscriptTurnExpectedState,
-  SessionTranscriptTurnLifecyclePatch,
-} from "./session-transcript-turn-lifecycle.types.js";
-import { sessionMatchesExpectedTranscriptTurn } from "./session-transcript-turn-state.js";
 import {
   mergeSessionEntry,
   mergeSessionEntryPreserveActivity,
@@ -54,18 +54,23 @@ export type SessionEntryBookkeepingReducer =
 /** Closed internal operations; arbitrary updater callbacks retain prepare/CAS. */
 type SessionEntryPatchStep = (
   | { kind: "fields"; patch: Partial<SessionEntry> }
+  | {
+      kind: "inbound-metadata";
+      metadata: PreparedSessionMetaPatch;
+      sessionKey: string;
+      creation: ReturnType<typeof buildSessionCreationStamp>;
+    }
+  | {
+      kind: "last-route";
+      route: Omit<Parameters<typeof projectLastRoutePatch>[0], "existing">;
+      creation: ReturnType<typeof buildSessionCreationStamp>;
+    }
   | { kind: "public-fields"; patch: Partial<SessionEntry> }
   | { kind: "ambient-transcript-watermark"; watermark: AmbientTranscriptWatermarkUpdate }
   | {
       kind: "ensure-identity";
       sessionId: string;
       creation: ReturnType<typeof buildSessionCreationStamp>;
-    }
-  | {
-      kind: "restart-admission";
-      sessionId: string;
-      expectedSessionState: SessionTranscriptTurnExpectedState;
-      patch: SessionTranscriptTurnLifecyclePatch;
     }
   | {
       kind: "pending-final-clear";
@@ -176,6 +181,18 @@ function reduceSessionEntryPatch(
     return null;
   }
   switch (operation.kind) {
+    case "inbound-metadata": {
+      const patch = projectSessionMetaPatch({
+        prepared: operation.metadata,
+        existing: existingEntry,
+        sessionKey: operation.sessionKey,
+      });
+      return existingEntry ? patch : { ...operation.creation, ...patch };
+    }
+    case "last-route": {
+      const patch = projectLastRoutePatch({ ...operation.route, existing: existingEntry });
+      return existingEntry ? patch : { ...operation.creation, ...patch };
+    }
     case "ensure-identity":
       return existingEntry?.sessionId
         ? null
@@ -190,16 +207,6 @@ function reduceSessionEntryPatch(
       return projectAmbientTranscriptWatermark(entry, operation.watermark);
     case "compaction-accounting":
       return projectCompactionAccountingPatch(entry, operation.accounting);
-    case "restart-admission":
-      return sessionMatchesExpectedTranscriptTurn(
-        { entry },
-        {
-          expectedSessionId: operation.sessionId,
-          expectedSessionState: operation.expectedSessionState,
-        },
-      )
-        ? operation.patch
-        : null;
     case "pending-final-clear": {
       const recoveryRunId = normalizeOptionalString(entry.restartRecoveryDeliveryRunId);
       const deliveries = entry.pendingFinalDelivery?.deliveries;

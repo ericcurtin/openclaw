@@ -14,6 +14,7 @@ import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
+import { stagePlacementTurnClaimWorkerPublication } from "./placement-turn-authority.js";
 import {
   isPreparedReservationWithinCapacity,
   preparedCapacityFromReservations,
@@ -110,39 +111,6 @@ export async function createWorkerEnvironmentStore(
     );
     return operation;
   }
-  async function reconcilePending() {
-    for (const recovery of owner.pendingReconciliations()) {
-      try {
-        assertActive();
-        const revision = owner.nextSequence();
-        const facts = await snapshot(recovery.ids);
-        publishSqliteCommittedState({
-          installFacts() {
-            owner.install(facts, revision, false);
-            owner.release(recovery.token);
-          },
-          installProjection() {
-            if (
-              recovery.revocationId &&
-              !facts.credentials.some(
-                (credential) => credential.environmentId === recovery.revocationId,
-              )
-            ) {
-              owner.publishCredentialRevoked(recovery.revocationId);
-            }
-          },
-          invalidate: () => owner.close(),
-          notify: () => sessionChanges.emit({ all: true, scope: "worker-environments" }),
-        });
-      } catch (error) {
-        throw new AggregateError(
-          [recovery.error, error],
-          "Worker environment mutation failed and inventory reconciliation failed",
-          { cause: error },
-        );
-      }
-    }
-  }
   function mutate<Key extends keyof Operations>(
     type: Key,
     input: Omit<Operations[Key]["input"], "publicationIncarnation">,
@@ -159,7 +127,6 @@ export async function createWorkerEnvironmentStore(
       publicationIncarnation: owner.incarnation,
     });
     const operation = owner.enqueue(async () => {
-      await reconcilePending();
       const token = {};
       let admission: SqliteWorkerOperationAdmission | undefined;
       let commitSequence: number | undefined;
@@ -195,6 +162,15 @@ export async function createWorkerEnvironmentStore(
         publishSqliteCommittedState({
           installFacts() {
             owner.install(facts, revision, false);
+            for (const placement of facts.placements ?? []) {
+              stagePlacementTurnClaimWorkerPublication(
+                context.admission.identity,
+                placement,
+                undefined,
+                undefined,
+                placement,
+              ).commit();
+            }
             owner.release(token);
             installed = true;
           },
@@ -222,11 +198,7 @@ export async function createWorkerEnvironmentStore(
           {
             assertCurrent: check,
             createAdmission: () => {
-              let stage: "transaction" | "commit" = "transaction";
               admission = createSqliteWorkerOperationAdmission((request, grant) => {
-                if (request.stage !== stage) {
-                  throw new Error("Worker environment write admission is out of order");
-                }
                 check();
                 if (request.stage === "commit") {
                   if (!isCommitAdmission(request.facts)) {
@@ -241,7 +213,6 @@ export async function createWorkerEnvironmentStore(
                 if (request.stage === "commit") {
                   commitSequence = owner.nextSequence();
                 }
-                stage = "commit";
               });
               observeSqliteWorkerCommittedFacts(admission, ({ facts }) => install(facts));
               return { nativeLocations: [pathname], admission };
@@ -265,14 +236,29 @@ export async function createWorkerEnvironmentStore(
           commitSequence !== undefined &&
           !(settlement?.kind === "completed" && !committedReceipt)
         ) {
-          // Retain only facts about settled writes, so another live facade can retry the read.
-          owner.retainReconciliation(
-            token,
-            committedIds,
-            error,
-            revocationPublished ? undefined : revocationId,
-          );
-          await reconcilePending();
+          try {
+            const revision = owner.nextSequence();
+            const facts = await snapshot(committedIds);
+            publishSqliteCommittedState({
+              installFacts() {
+                owner.install(facts, revision, false);
+                owner.release(token);
+              },
+              installProjection() {
+                if (
+                  revocationId &&
+                  !facts.credentials.some((credential) => credential.environmentId === revocationId)
+                ) {
+                  publishRevocation();
+                }
+              },
+              invalidate: () => owner.close(),
+              notify: () => sessionChanges.emit({ all: true, scope: "worker-environments" }),
+            });
+          } catch {
+            // SQLite retains the write; a new inventory reloads after this readback fails.
+            owner.close();
+          }
         }
         owner.release(token);
         throw error;
@@ -308,17 +294,10 @@ export async function createWorkerEnvironmentStore(
     await mutate("workerEnvironments.initialize", {});
     // First creation publishes its physical identity through the captured admission.
     workerEnvironmentProjections.get(context.admission.identity);
-    // Hydration joins writer publication; native commits invalidate an in-flight snapshot.
+    // Hydration joins the inventory writer queue.
     await owner.enqueue(async () => {
-      for (;;) {
-        const version = owner.version();
-        const facts = await snapshot();
-        if (owner.version() !== version) {
-          continue;
-        }
-        owner.install(facts, owner.nextSequence(), false);
-        break;
-      }
+      const facts = await snapshot();
+      owner.install(facts, owner.nextSequence(), false);
     });
   } catch (error) {
     await close();
@@ -335,14 +314,8 @@ export async function createWorkerEnvironmentStore(
   };
   const ready = async () => {
     assertActive();
-    for (;;) {
-      await owner.ready();
-      assertActive();
-      if (!owner.hasPendingReconciliation()) {
-        return;
-      }
-      await track(owner.enqueue(reconcilePending));
-    }
+    await owner.ready();
+    assertActive();
   };
   const store = {
     close,

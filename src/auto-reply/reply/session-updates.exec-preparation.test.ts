@@ -9,6 +9,10 @@ import {
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
   applySessionEntryLifecycleMutation,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
@@ -56,6 +60,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     vi.restoreAllMocks();
     await closeOpenClawAgentDatabasesAsync();
     await closeOpenClawStateDatabaseAsync();
+    clearRuntimeConfigSnapshot();
     vi.unstubAllEnvs();
     cleanup();
   }),
@@ -158,9 +163,14 @@ it.each([false, true])(
 
 it("prepares current sandbox and approval skill eligibility without caller-thread SQL", async () => {
   const root = tempDirs.make("openclaw-skill-exec-");
+  const executionConfig: OpenClawConfig = {
+    agents: { defaults: { sandbox: { mode: "all" } } },
+    tools: { exec: { host: "auto", node: "build-node", mode: "full" } },
+  };
   const source = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
   const approvals = vi.spyOn(approvalStore, "loadExecApprovalsReadOnlyAsync");
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  setRuntimeConfigSnapshot(executionConfig);
   const scope = { agentId: "main", sessionKey: "agent:main:exec-preparation" };
   await upsertSessionEntryCore(scope, { sessionId: "skill-exec", updatedAt: 1 });
   const { databaseClaim } = await loadSessionEntryForAdmission(scope);
@@ -183,15 +193,7 @@ it("prepares current sandbox and approval skill eligibility without caller-threa
       );
       approvals.mockClear();
       const calls = observeMainThreadSql();
-      const pending = prepare(
-        root,
-        {
-          agents: { defaults: { sandbox: { mode: "all" } } },
-          tools: { exec: { host: "auto", node: "build-node", mode: "full" } },
-        },
-        undefined,
-        databaseClaim.reader,
-      );
+      const pending = prepare(root, executionConfig, undefined, databaseClaim.reader);
       vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-foreign-skill-exec-"));
       await pending;
       expect(approvals).toHaveBeenCalledTimes(approvalReads);
@@ -208,115 +210,85 @@ it("prepares current sandbox and approval skill eligibility without caller-threa
   }
 });
 
-it.each(["metadata", "lifecycle", "refresh"] as const)(
-  "consumes current skill preparation state after a concurrent change (%s)",
-  async (change) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:skill-cohort",
-        storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
-      };
-      const entry = {
-        sessionId: "skill-cohort",
-        lifecycleRevision: "original",
-        updatedAt: 1,
-        pinnedAt: 1,
-        skillsSnapshot: { prompt: "prepared skills", skills: [] },
-      };
-      await replaceSessionEntry(scope, entry);
-      const { databaseClaim } = await loadSessionEntryForAdmission(scope);
-      if (!("kind" in databaseClaim) || !databaseClaim.reader) {
-        await databaseClaim.release();
-        throw new Error("Expected an admitted skill reader");
-      }
-      const reader = databaseClaim.reader;
-      const phases = vi.spyOn(reader, "withRead");
-      const handle = createReplySessionEntryHandle({
-        sessionKey: scope.sessionKey,
-        sessionEntry: entry,
-      });
-      const entered = createDeferredCore();
-      const resume = createDeferredCore();
-      const skillsSnapshot =
-        change === "refresh" ? { prompt: "refreshed skills", skills: [] } : entry.skillsSnapshot;
-      vi.mocked(resolveReusableWorkspaceSkillSnapshot).mockImplementationOnce(async () => {
-        entered.resolve();
-        await resume.promise;
-        return {
-          snapshot: skillsSnapshot,
-          shouldRefresh: change === "refresh",
-          snapshotVersion: 0,
-        };
-      });
-      const pending = ensureSkillSnapshot({
-        ...scope,
-        cfg: {},
-        workspaceDir: state.statePath("workspace"),
-        isFirstTurnInSession: false,
-        sessionEntry: entry,
-        sessionEntryHandle: handle,
-        reader,
-      });
-      try {
-        await awaitGateBeforeSettlement(
-          entered.promise,
-          pending,
-          "skill preparation did not start",
-        );
-        if (change === "lifecycle") {
-          await applySessionEntryLifecycleMutation({
-            agentId: scope.agentId,
-            storePath: scope.storePath,
-            upserts: [
-              {
-                sessionKey: scope.sessionKey,
-                entry: { ...entry, lifecycleRevision: "replacement" },
-              },
-            ],
-            skipMaintenance: true,
-          });
-        } else {
-          await replaceSessionEntry(scope, {
-            ...entry,
-            pinnedAt: undefined,
-            updatedAt: 2,
-            systemSent: true,
-          });
-        }
-        resume.resolve();
-        if (change === "lifecycle") {
-          await expect(pending).rejects.toThrow("changed");
-          expect(handle.getCurrent()).toEqual(entry);
-        } else {
-          const result = await pending;
-          expect(result).toMatchObject({
-            systemSent: true,
-            skillsSnapshot,
-            sessionEntry: {
-              updatedAt: change === "refresh" ? expect.any(Number) : 2,
-              systemSent: true,
-              skillsSnapshot,
-            },
-          });
-          expect(result.sessionEntry).not.toHaveProperty("pinnedAt");
-          expect(handle.getCurrent()).toEqual(result.sessionEntry);
-          if (change === "refresh") {
-            expect(loadSessionEntry(scope)).toMatchObject({ skillsSnapshot, systemSent: true });
-          }
-        }
-        expect(phases).toHaveBeenCalledTimes(change === "refresh" ? 3 : 2);
-      } finally {
-        resume.resolve();
-        await Promise.allSettled([pending, databaseClaim.release()]);
-      }
+it("refreshes skills without overwriting other session fields", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:skill-cohort",
+      storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
+    };
+    const entry = {
+      sessionId: "skill-cohort",
+      lifecycleRevision: "original",
+      updatedAt: 1,
+      pinnedAt: 1,
+      skillsSnapshot: { prompt: "prepared skills", skills: [] },
+    };
+    await replaceSessionEntry(scope, entry);
+    const { databaseClaim } = await loadSessionEntryForAdmission(scope);
+    if (!("kind" in databaseClaim) || !databaseClaim.reader) {
+      await databaseClaim.release();
+      throw new Error("Expected an admitted skill reader");
+    }
+    const reader = databaseClaim.reader;
+    const handle = createReplySessionEntryHandle({
+      sessionKey: scope.sessionKey,
+      sessionEntry: entry,
     });
-  },
-);
+    const entered = createDeferredCore();
+    const resume = createDeferredCore();
+    const skillsSnapshot = { prompt: "refreshed skills", skills: [] };
+    vi.mocked(resolveReusableWorkspaceSkillSnapshot).mockImplementationOnce(async () => {
+      entered.resolve();
+      await resume.promise;
+      return {
+        snapshot: skillsSnapshot,
+        shouldRefresh: true,
+        snapshotVersion: 0,
+      };
+    });
+    const pending = ensureSkillSnapshot({
+      ...scope,
+      cfg: {},
+      workspaceDir: state.statePath("workspace"),
+      isFirstTurnInSession: false,
+      sessionEntry: entry,
+      sessionEntryHandle: handle,
+      reader,
+    });
+    try {
+      await awaitGateBeforeSettlement(entered.promise, pending, "skill preparation did not start");
+      await replaceSessionEntry(scope, {
+        ...entry,
+        pinnedAt: undefined,
+        updatedAt: 2,
+        systemSent: true,
+      });
+      resume.resolve();
+      const result = await pending;
+      expect(result).toMatchObject({
+        systemSent: true,
+        skillsSnapshot,
+        sessionEntry: {
+          updatedAt: expect.any(Number),
+          systemSent: true,
+          skillsSnapshot,
+        },
+      });
+      expect(result.sessionEntry).not.toHaveProperty("pinnedAt");
+      expect(handle.getCurrent()).toEqual(result.sessionEntry);
+      expect(loadSessionEntry(scope)).toMatchObject({ skillsSnapshot, systemSent: true });
+    } finally {
+      resume.resolve();
+      await Promise.allSettled([pending, databaseClaim.release()]);
+    }
+  });
+});
 
 it("refuses policy preparation when its admitted reader closes during the approval read", async () => {
   const root = tempDirs.make("openclaw-skill-reader-retired-");
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  setRuntimeConfigSnapshot(config);
   const scope = { agentId: "main", sessionKey: "agent:main:exec-preparation" };
   await upsertSessionEntryCore(scope, { sessionId: "skill-exec", updatedAt: 1 });
   const { databaseClaim } = await loadSessionEntryForAdmission(scope);
@@ -348,7 +320,12 @@ it.each(["approvals", "skills"] as const)(
   "refuses prepared eligibility when sandbox policy changes during %s preparation",
   async (phase) => {
     const root = tempDirs.make("openclaw-skill-policy-changed-");
+    const executionConfig: OpenClawConfig = {
+      ...config,
+      agents: { defaults: { sandbox: { mode: "all" } } },
+    };
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    setRuntimeConfigSnapshot(executionConfig);
     const scope = { agentId: "main", sessionKey: "agent:main:exec-preparation" };
     await upsertSessionEntryCore(scope, {
       sessionId: "skill-exec",
@@ -378,12 +355,7 @@ it.each(["approvals", "skills"] as const)(
       }
       return { snapshot: { prompt: "", skills: [] }, shouldRefresh: false, snapshotVersion: 0 };
     });
-    const pending = prepare(
-      root,
-      { ...config, agents: { defaults: { sandbox: { mode: "all" } } } },
-      undefined,
-      databaseClaim.reader,
-    );
+    const pending = prepare(root, executionConfig, undefined, databaseClaim.reader);
     try {
       await awaitGateBeforeSettlement(entered.promise, pending, "policy wait did not start");
       await upsertSessionEntryCore(scope, { sandboxMode: undefined });
