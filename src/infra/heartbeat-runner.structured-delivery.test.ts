@@ -39,6 +39,14 @@ import {
 import { isRetryableHeartbeatSkipReason } from "./heartbeat-wake.js";
 import { resetSystemEventsForTest } from "./system-events.js";
 
+vi.mock("../tts/tts.runtime.js", async () => {
+  const { maybeApplyTtsToPayloadCore } = await import("../tts/tts-payload.js");
+  return {
+    maybeApplyTtsToPayload: (params: Parameters<typeof maybeApplyTtsToPayloadCore>[0]) =>
+      maybeApplyTtsToPayloadCore(params, async () => "https://example.test/heartbeat.ogg"),
+  };
+});
+
 installHeartbeatRunnerTestRuntime();
 const TELEGRAM_GROUP = "-1001234567890";
 type RunOptions = Omit<Parameters<typeof runHeartbeatOnce>[0], "cfg" | "deps">;
@@ -120,13 +128,13 @@ describe("runHeartbeatOnce structured heartbeat delivery", () => {
           { tts: { tagged: true, text: "The build is ready." } },
         ),
       ]);
-      expect((await run()).status).toBe("ran");
+      expect(await run()).toMatchObject({ status: "ran" });
       expect(synthesizeMock).toHaveBeenCalledOnce();
       expect(synthesizeMock.mock.calls[0]?.[0].text).toBe("The build is ready.");
       expect(sendTelegram).toHaveBeenCalledOnce();
       expect(sendTelegram.mock.calls[0]?.[1]).toBe("");
       expect(sendTelegram.mock.calls[0]?.[2]).toMatchObject({
-        mediaUrl: expect.any(String),
+        mediaUrl: "https://example.test/heartbeat.ogg",
         audioAsVoice: true,
       });
     }),
