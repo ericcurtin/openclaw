@@ -1,10 +1,11 @@
 ## OpenClaw Android App
 
-OpenClaw Android is the officially released Google Play app. It connects to an OpenClaw Gateway as a companion node for chat, voice, approvals, screen, and device-aware automation.
+OpenClaw Android is the officially released Google Play app. It connects to an OpenClaw Gateway as a companion node for chat, voice, approvals, screen, and device-aware automation. A Gateway is required for everything except the opt-in [local mode](#local-mode-no-gateway), which offers plain chat with a model provider and nothing else.
 
 ### App features
 
 - Pair with a Gateway using a QR code, setup code, or manual connection. Gateway credentials are stored encrypted.
+- Optionally try plain chat without a Gateway: **Use without a Gateway** (first-run setup, or **Settings → Gateway → Add Gateway**) chats with an OpenAI-compatible provider directly from the phone, with no tools. See [Local mode](#local-mode-no-gateway).
 - Stream chat replies, choose models and reasoning effort, manage session permissions, and expand task progress. The draft has its own full-width row above one control row: **+**, model, and reasoning on the left; microphone and Talk/send on the right. Session permissions are inside the **+** menu, with the current access mode shown. The model name opens a compact searchable provider menu above the composer; the configured default is marked on its model row, without settings buttons in the picker. The top-right **Chat actions** menu includes **Context** with its live usage ring, which opens context usage, latest tokens, and the cost breakdown. Tap the microphone for dictation. While listening, a Stop icon replaces the microphone; tap it to finish listening. While starting or transcribing, a Close icon cancels that attempt. Long-press for voice messages or Talk, or use the Talk button beside the microphone when the draft is empty. The effort dial opens the live-preview slider and Fast mode.
 - Select agents, pin sessions, and browse available native session catalogs from the sidebar. Connecting creates or adopts a dedicated Android session without resetting its history. Native sessions keep their runtime-owned model: Android shows that ownership instead of offering a model change. New session starts independently of the current native thread. Generic child-session forks and new worktrees are unavailable for those sessions; supported message-level forks remain available.
 - Session group renames and deletions stay on the Gateway where they started. Switching Gateways never carries unfinished group changes or their error messages to the replacement Gateway.
@@ -19,6 +20,27 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 - View the phone's memory and disk meters on the Control UI Devices page. Connected Android nodes report host resource stats immediately and every 60 seconds; disk meters require an available storage sample and a Gateway that supports host stats.
 - Manage installed skills and Gateway-verified ClawHub releases, and inspect or edit automations with the required Gateway access.
 - Use the Wear OS companion for sessions, replies, aborts, and realtime Talk through the paired phone without storing Gateway credentials on the watch.
+
+<a id="local-mode-no-gateway" />
+
+## Local mode (no Gateway)
+
+Local mode is an explicit, opt-in route for plain chat with a user-configured OpenAI-compatible endpoint (`<base URL>/chat/completions`, SSE streaming): OpenAI, OpenRouter, or Ollama, llama.cpp, and LM Studio on the LAN. It is off by default, has no tools of any kind, and is a ramp to a Gateway. User-facing behavior, limits, and the security model are in [Android app](https://docs.openclaw.ai/platforms/android#local-mode-without-a-gateway).
+
+Implementation notes:
+
+- **Seam.** `ChatController` has no transport interface, but its only contact with a Gateway is request lambdas plus `handleGatewayEvent` (the screenshot fixture and the controller tests already drive it that way). `app/src/main/java/ai/openclaw/app/local/` implements the handful of chat RPCs plain chat needs (`LocalChatBackend`) behind `LocalChatTransport`, which `ChatController`'s Gateway constructor consults only while `LocalChatRoute` is active. The chat screen, composer, streaming, outbox, and transcript cache are reused unchanged; with local mode off the Gateway path is unchanged.
+- **Route, not registry entry.** Local mode lives beside `GatewayRegistryStore`, keyed `local|chat`, so no Gateway code reads or writes it and older builds never meet an unknown registry kind. `ChatCacheScope`, the outbox, and composer owners key off that id, which keeps its state separate from every Gateway's.
+- **Methods answered.** `LOCAL_ADVERTISED_METHODS` is the whole surface: health, chat metadata and history, send and abort, models list, and session list, create, describe, patch (rename only), and delete. `NodeRuntime` reports everything else as unadvertised, so Gateway-only RPCs are never attempted.
+- **Storage.** The endpoint, API key, and active flag are `SecurePrefs` entries (`local.config`, `local.apiKey`, `local.active`), removed together. Conversations are Room rows in `local-chat.db` as ordered plain-text turns. That is the durable, replayable record; the Gateway transcript cache is disposable and is not used for it.
+- **Transport.** `LocalChatClient` uses the existing OkHttp dependency, requires `https` except for the Gateway cleartext host rules (`isLocalCleartextGatewayHost`), rejects URL userinfo, query, and fragment, and does not follow redirects. Errors are mapped by status or exception type, never by exception message.
+
+JVM tests live in `app/src/test/java/ai/openclaw/app/local/`:
+
+```bash
+cd apps/android
+./gradlew :app:testPlayDebugUnitTest --tests 'ai.openclaw.app.local.*'
+```
 
 ## Open in Android Studio
 

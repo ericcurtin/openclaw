@@ -48,6 +48,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 private sealed interface GatewayAdditionStep {
   data object Scan : GatewayAdditionStep
 
+  /** Opt-in local mode: chat with a model provider directly, no Gateway. */
+  data object Local : GatewayAdditionStep
+
   data class ScanError(
     val message: String,
   ) : GatewayAdditionStep
@@ -222,6 +225,22 @@ internal fun GatewayAdditionDialog(
               gallery.launch("image/*")
             }, modifier = Modifier.fillMaxWidth())
             TextButton(onClick = { step = GatewayAdditionStep.Manual() }) { Text(nativeString("Set up manually")) }
+            TextButton(onClick = { step = GatewayAdditionStep.Local }) { Text(nativeString("Use without a Gateway")) }
+          }
+
+          GatewayAdditionStep.Local -> {
+            Text(nativeString("Use without a Gateway"), style = ClawTheme.type.section)
+            LocalModeSetupForm(
+              initial = null,
+              hasSavedKey = false,
+              submitLabel = nativeString("Start chatting"),
+              onSubmit = { config, key ->
+                if (isCurrent()) {
+                  viewModel.saveLocalMode(config, key, focus = true)
+                  cancel()
+                }
+              },
+            )
           }
 
           is GatewayAdditionStep.ReadingImage -> {

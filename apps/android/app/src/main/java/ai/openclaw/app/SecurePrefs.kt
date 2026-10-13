@@ -6,6 +6,8 @@ import ai.openclaw.app.gateway.GatewayBootstrapHandoff
 import ai.openclaw.app.gateway.GatewayCustomHeaders
 import ai.openclaw.app.gateway.GatewayRegistryStore
 import ai.openclaw.app.gateway.GatewayStoreMigration
+import ai.openclaw.app.local.LocalModeStore
+import ai.openclaw.app.local.SecurePrefsLocalModeStore
 import ai.openclaw.app.node.asStringOrNull
 import ai.openclaw.app.node.parseHexColorArgb
 import ai.openclaw.app.voice.VoiceWakePreferences
@@ -161,6 +163,10 @@ class SecurePrefs(
     GatewayStoreMigration(this).run()
     GatewayRegistryStore(this)
   }
+
+  // Opt-in local mode keeps its endpoint, API key, and active flag in this encrypted store, apart
+  // from the Gateway registry, so Gateway flows never read or write it.
+  internal val localMode: LocalModeStore by lazy { SecurePrefsLocalModeStore(this) }
 
   private val _displayName =
     MutableStateFlow(loadOrMigrateDisplayName(context = context))

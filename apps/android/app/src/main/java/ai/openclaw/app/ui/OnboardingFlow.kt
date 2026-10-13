@@ -394,6 +394,8 @@ fun OnboardingFlow(
     var nodeApprovalCheckRefreshStarted by rememberSaveable { mutableStateOf(false) }
     var nodeApprovalAutoContinueEnabled by rememberSaveable { mutableStateOf(false) }
     var nativeNodeApprovalRequested by rememberSaveable { mutableStateOf(false) }
+    // Heap-only on purpose: opting out of a Gateway is an explicit action that never survives a restart.
+    var localSetupOpen by remember { mutableStateOf(false) }
     val ready =
       canFinishOnboarding(
         isConnected = isConnected,
@@ -447,6 +449,7 @@ fun OnboardingFlow(
     ) {
       goBack()
     }
+    BackHandler(enabled = localSetupOpen) { localSetupOpen = false }
 
     LaunchedEffect(startAtGatewaySetup) {
       if (startAtGatewaySetup) {
@@ -767,6 +770,11 @@ fun OnboardingFlow(
       )
     }
 
+    if (localSetupOpen) {
+      LocalModeOnboardingScreen(viewModel = viewModel, onBack = { localSetupOpen = false }, modifier = modifier)
+      return@ClawDesignTheme
+    }
+
     when (step) {
       OnboardingStep.Welcome -> {
         WelcomeScreen(
@@ -800,6 +808,7 @@ fun OnboardingFlow(
             }
             step = OnboardingStep.Manual
           },
+          onUseLocal = { localSetupOpen = true },
         )
       }
 
@@ -1100,6 +1109,8 @@ internal fun GatewaySetupScreen(
   onSetupCode: () -> Unit,
   onManualSetup: () -> Unit,
   modifier: Modifier = Modifier,
+  // Null hides the opt-in local mode entry, which keeps every other caller unchanged.
+  onUseLocal: (() -> Unit)? = null,
 ) {
   val context = LocalContext.current
   val uriHandler = LocalUriHandler.current
@@ -1122,6 +1133,11 @@ internal fun GatewaySetupScreen(
         onClick = onManualSetup,
         modifier = Modifier.onboardingActionButton(),
       )
+      onUseLocal?.let {
+        TextButton(onClick = it, modifier = Modifier.onboardingActionButton()) {
+          Text(text = nativeString("Use without a Gateway"), style = ClawTheme.type.label)
+        }
+      }
     },
   ) {
     GatewayPrerequisites(
@@ -1132,6 +1148,29 @@ internal fun GatewaySetupScreen(
           Toast.makeText(context, nativeString("Could not open setup guide."), Toast.LENGTH_SHORT).show()
         }
       },
+    )
+  }
+}
+
+@Composable
+private fun LocalModeOnboardingScreen(
+  viewModel: MainViewModel,
+  onBack: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  OnboardingIntroScreen(
+    title = nativeString("Use without a Gateway"),
+    subtitle = nativeString("Chat with a model provider straight from this phone."),
+    mark = { ClawIconBadge(Icons.Default.Link, size = OnboardingHeroMarkSize, iconSize = 40.dp, color = ClawTheme.colors.surfaceRaised) },
+    modifier = modifier,
+    onBack = onBack,
+    actions = {},
+  ) {
+    LocalModeSetupForm(
+      initial = null,
+      hasSavedKey = false,
+      submitLabel = nativeString("Start chatting"),
+      onSubmit = { config, key -> viewModel.saveLocalMode(config, key, focus = true) },
     )
   }
 }

@@ -46,4 +46,7 @@ internal enum class SettingsRoute(
   ;
 
   fun isAvailable(desktopObserveAvailable: Boolean): Boolean = this != Desktop || desktopObserveAvailable
+
+  /** Routes backed only by this phone's own state; every other route reads or writes a Gateway. */
+  fun worksWithoutGateway(): Boolean = this == Home || this == Profile || this == Appearance || this == Gateway || this == About || this == Licenses
 }

@@ -182,6 +182,12 @@ internal fun SettingsDetailScreen(
   route: SettingsRoute,
   onBack: () -> Unit,
 ) {
+  val localModeActive by viewModel.localModeActive.collectAsState()
+  if (localModeActive && !route.worksWithoutGateway()) {
+    // Search and deep links can still reach these routes; say what is missing instead of failing.
+    NeedsGatewaySettingsScreen(viewModel = viewModel, route = route, onBack = onBack)
+    return
+  }
   when (route) {
     SettingsRoute.Home -> Unit
     SettingsRoute.Profile -> ProfileSettingsScreen(viewModel = viewModel, onBack = onBack)
@@ -205,6 +211,24 @@ internal fun SettingsDetailScreen(
     SettingsRoute.Health -> HealthLogsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.About -> AboutSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Licenses -> LicensesSettingsScreen(onBack = onBack)
+  }
+}
+
+@Composable
+private fun NeedsGatewaySettingsScreen(
+  viewModel: MainViewModel,
+  route: SettingsRoute,
+  onBack: () -> Unit,
+) {
+  SettingsDetailFrame(subtitle = nativeString("This needs a Gateway."), route = route, onBack = onBack) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+      Text(localModeLimitsText(), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+      ClawPrimaryButton(
+        text = nativeString("Add Gateway"),
+        onClick = viewModel::openGatewayAddition,
+        modifier = Modifier.fillMaxWidth(),
+      )
+    }
   }
 }
 
@@ -1510,6 +1534,8 @@ private fun GatewaySettingsScreen(
   val manualTls by viewModel.manualTls.collectAsState()
   val pairedGateways by viewModel.pairedGateways.collectAsState()
   val activeGatewayStableId by viewModel.activeGatewayStableId.collectAsState()
+  val localModeActive by viewModel.localModeActive.collectAsState()
+  val localModeConfig by viewModel.localModeConfig.collectAsState()
   val connectedGatewayStableIds by viewModel.connectedGatewayStableIds.collectAsState()
   val discoveredGateways by viewModel.gateways.collectAsState()
   val gatewayAgents by viewModel.gatewayAgents.collectAsState()
@@ -1530,6 +1556,8 @@ private fun GatewaySettingsScreen(
   var showSetupCodeHelp by remember { mutableStateOf(false) }
   var pendingSetupResetPlan by remember { mutableStateOf<GatewayConnectPlan?>(null) }
   var pendingForgetStableId by remember { mutableStateOf<String?>(null) }
+  var showLocalModeSettings by remember { mutableStateOf(false) }
+  var pendingLocalModeRemoval by remember { mutableStateOf(false) }
   var pendingRenameStableId by rememberSaveable { mutableStateOf<String?>(null) }
   val renameScope = rememberCoroutineScope()
   val transport =
@@ -1622,6 +1650,32 @@ private fun GatewaySettingsScreen(
     )
   }
 
+  if (showLocalModeSettings) {
+    LocalModeSettingsDialog(viewModel = viewModel, onDismiss = { showLocalModeSettings = false })
+  }
+
+  if (pendingLocalModeRemoval) {
+    FoldAwarePrompt(
+      onDismissRequest = { pendingLocalModeRemoval = false },
+      title = nativeString("Remove local mode?"),
+      text = {
+        Text(nativeString("Delete the saved endpoint, API key, and local conversations from this phone?"))
+      },
+      actions = {
+        TextButton(onClick = { pendingLocalModeRemoval = false }) { Text(nativeString("Cancel")) }
+        TextButton(
+          onClick = {
+            pendingLocalModeRemoval = false
+            viewModel.removeLocalMode()
+          },
+        ) {
+          Text(nativeString("Remove"))
+        }
+      },
+      containerColor = ClawTheme.colors.surface,
+    )
+  }
+
   pendingForgetStableId?.let { stableId ->
     val entry = pairedGateways.firstOrNull { it.stableId == stableId }
     val gatewayName = entry?.displayName ?: nativeString("this gateway")
@@ -1693,14 +1747,24 @@ private fun GatewaySettingsScreen(
       )
     },
   ) {
-    SettingsMetricPanel(
-      rows =
-        listOf(
-          SettingsMetric(nativeString("Gateway"), pairedGateways.firstOrNull { it.stableId == activeGatewayStableId }?.localName ?: serverName?.takeIf { it.isNotBlank() } ?: nativeString("Home Gateway")),
-          SettingsMetric(nativeString("Connection"), if (gatewayConnectionDisplay.isConnected) nativeString("Connected") else nativeString("Offline")),
-          SettingsMetric(nativeString("Status"), gatewayStatusLabel(gatewayConnectionDisplay)),
-        ),
-    )
+    if (localModeActive) {
+      SettingsMetricPanel(
+        rows =
+          listOf(
+            SettingsMetric(nativeString("Route"), nativeString("Local mode")),
+            SettingsMetric(nativeString("Status"), nativeString("Plain chat on this phone")),
+          ),
+      )
+    } else {
+      SettingsMetricPanel(
+        rows =
+          listOf(
+            SettingsMetric(nativeString("Gateway"), pairedGateways.firstOrNull { it.stableId == activeGatewayStableId }?.localName ?: serverName?.takeIf { it.isNotBlank() } ?: nativeString("Home Gateway")),
+            SettingsMetric(nativeString("Connection"), if (gatewayConnectionDisplay.isConnected) nativeString("Connected") else nativeString("Offline")),
+            SettingsMetric(nativeString("Status"), gatewayStatusLabel(gatewayConnectionDisplay)),
+          ),
+      )
+    }
     // First-run hero: no paired gateways yet, so pairing is the primary action.
     if (gatewayShowsScanHero(pairedGateways.size)) {
       ClawPrimaryButton(
@@ -1729,13 +1793,15 @@ private fun GatewaySettingsScreen(
         }
       }
     }
-    FlowRow(
-      modifier = Modifier.fillMaxWidth(),
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
-      verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-      ClawPrimaryButton(text = nativeString("Reconnect"), onClick = viewModel::refreshGatewayConnection, modifier = Modifier.weight(1f))
-      ClawSecondaryButton(text = nativeString("Disconnect"), onClick = viewModel::disconnect, modifier = Modifier.weight(1f))
+    if (!localModeActive) {
+      FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        ClawPrimaryButton(text = nativeString("Reconnect"), onClick = viewModel::refreshGatewayConnection, modifier = Modifier.weight(1f))
+        ClawSecondaryButton(text = nativeString("Disconnect"), onClick = viewModel::disconnect, modifier = Modifier.weight(1f))
+      }
     }
     ClawPanel(verticalArrangement = Arrangement.spacedBy(4.dp)) {
       Text(text = nativeString("Gateways"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
@@ -1771,6 +1837,25 @@ private fun GatewaySettingsScreen(
             TextButton(onClick = { pendingRenameStableId = entry.stableId }) { Text(nativeString("Rename")) }
             TextButton(onClick = { pendingForgetStableId = entry.stableId }) { Text(nativeString("Forget")) }
           }
+        }
+      }
+    }
+    localModeConfig?.let { config ->
+      ClawPanel(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(text = nativeString("Local mode"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        Text(text = localModeLimitsText(), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+        ClawListItem(
+          title = nativeString("Local chat"),
+          subtitle = listOf(config.model, config.baseUrl).joinToString(" · "),
+          maxLines = 2,
+          leading = { ClawIconBadge(if (localModeActive) Icons.Default.Check else Icons.Default.Cloud) },
+          trailing = null,
+          onClick = if (localModeActive) null else viewModel::selectLocalMode,
+        )
+        FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+          if (!localModeActive) TextButton(onClick = viewModel::selectLocalMode) { Text(nativeString("Use local chat")) }
+          TextButton(onClick = { showLocalModeSettings = true }) { Text(nativeString("Edit")) }
+          TextButton(onClick = { pendingLocalModeRemoval = true }) { Text(nativeString("Remove")) }
         }
       }
     }

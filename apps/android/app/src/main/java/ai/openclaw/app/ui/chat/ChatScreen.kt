@@ -66,6 +66,7 @@ import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 import ai.openclaw.app.ui.AppModalBottomSheet
 import ai.openclaw.app.ui.FoldAwareDropdownMenu
 import ai.openclaw.app.ui.FoldAwareMenuItem
+import ai.openclaw.app.ui.LocalModeChatNotice
 import ai.openclaw.app.ui.ProviderSignInDialog
 import ai.openclaw.app.ui.TabletopPaneBounds
 import ai.openclaw.app.ui.copyGatewayDiagnosticsReport
@@ -400,6 +401,7 @@ internal fun ChatScreen(
   val canWriteSessionSettings = operatorScopesAllowWrite(operatorScopes)
   val canAdminSessionSettings = operatorScopesAllowAdmin(operatorScopes)
   val activeGatewayStableId by viewModel.activeGatewayStableId.collectAsState()
+  val localModeActive by viewModel.localModeActive.collectAsState()
   val sessionKey by viewModel.chatSessionKey.collectAsState()
   val selectionGeneration by viewModel.chatSelectionGeneration.collectAsState()
   val gatewayCatalogRevision by viewModel.gatewayCatalogRevision.collectAsState()
@@ -477,7 +479,8 @@ internal fun ChatScreen(
   val gatewayAddress = gatewayDiagnosticsEndpoint(remoteAddress = remoteAddress, manualHost = manualHost, manualPort = manualPort, manualTls = manualTls)
   val gatewayProblemMessage = gatewayConnectionDisplay.problem?.message?.takeIf { it.isNotBlank() }
   val offlineStatus = gatewayConnectionStatusForDisplay(gatewayProblemMessage ?: gatewayConnectionDisplay.statusText)
-  val gatewayOffline = !gatewayConnectionDisplay.isConnected
+  // Local mode has no Gateway connection by design; offline recovery advice would be wrong there.
+  val gatewayOffline = !gatewayConnectionDisplay.isConnected && !localModeActive
   val effectiveGatewayDefaultAgentId =
     resolveGatewayDefaultAgentId(activeGatewayStableId, gatewayDefaultAgentId, gatewayComposerDefaultAgentOwner)
   val sessionAgentId = resolveAgentIdFromMainSessionKey(sessionKey) ?: sessionOwnerAgentId ?: effectiveGatewayDefaultAgentId ?: "main"
@@ -922,6 +925,7 @@ internal fun ChatScreen(
         dismissDetails()
         onOpenDashboard(sessionKey)
       },
+      showDashboard = !localModeActive,
       onOpenBrowser =
         browserPresentation?.takeIf { composerOwnerReady }?.let {
           {
@@ -951,10 +955,12 @@ internal fun ChatScreen(
     )
   }
   val conversationStatus: @Composable () -> Unit = {
+    if (localModeActive) LocalModeChatNotice(onConnectGateway = viewModel::openGatewayAddition)
     errorText?.takeIf { it.isNotBlank() }?.let { error ->
       ChatNotice(
         title = nativeString("Chat needs attention"),
-        body = userFacingChatError(error = error, gatewayConnected = gatewayConnectionDisplay.isConnected),
+        // Gateway wording would mislabel a provider error that merely mentions "auth" in local mode.
+        body = if (localModeActive) error else userFacingChatError(error = error, gatewayConnected = gatewayConnectionDisplay.isConnected),
       )
     }
     if (talkActive) {
@@ -1121,8 +1127,10 @@ internal fun ChatScreen(
       voiceNoteState = voiceNoteState,
       voiceNoteElapsedMs = voiceNoteElapsedMs,
       voiceNoteLevel = voiceNoteLevel,
+      localMode = localModeActive,
       recordVoiceNoteEnabled =
         !talkActive &&
+          !localModeActive &&
           !composerOwner.gatewayStableId.isNullOrBlank() &&
           pendingRunCount == 0 &&
           !micCaptureActive &&
@@ -1526,6 +1534,7 @@ private fun ChatHeader(
   onNewChatInWorktree: () -> Unit,
   onRefresh: () -> Unit,
   onOpenDashboard: () -> Unit,
+  showDashboard: Boolean,
   onOpenBrowser: (() -> Unit)?,
   onOpenReviewDiff: () -> Unit,
   onOpenBranchSwitcher: () -> Unit,
@@ -1690,7 +1699,7 @@ private fun ChatHeader(
               if (sessionDiffAvailable) {
                 add(FoldAwareMenuItem("review-diff", nativeString("Review changes"), onOpenReviewDiff, Icons.Default.Difference))
               }
-              add(FoldAwareMenuItem("dashboard", nativeString("Dashboard"), onOpenDashboard, Icons.Default.Dashboard))
+              if (showDashboard) add(FoldAwareMenuItem("dashboard", nativeString("Dashboard"), onOpenDashboard, Icons.Default.Dashboard))
               onOpenBrowser?.let { add(FoldAwareMenuItem("browser", nativeString("Agent browser"), it, Icons.Default.Language)) }
               if (workspaceGit) {
                 add(FoldAwareMenuItem("worktree", newChatInWorktreeLabel, onNewChatInWorktree, enabled = newChatEnabled))
@@ -3181,6 +3190,8 @@ private fun ChatComposer(
   voiceNoteState: VoiceNoteRecorderState,
   voiceNoteElapsedMs: Long,
   voiceNoteLevel: Float,
+  // Local mode is text-only: no attachments, no voice notes, and no Gateway-backed Talk.
+  localMode: Boolean,
   recordVoiceNoteEnabled: Boolean,
   onStartVoiceNote: () -> Unit,
   onCancelVoiceNote: () -> Unit,
@@ -3386,8 +3397,10 @@ private fun ChatComposer(
                 Icon(Icons.Default.MoreVert, contentDescription = nativeString("Details"))
               }
             }
-            IconButton(onClick = onOpenAttachments, enabled = inputEnabled, modifier = Modifier.size(width = iconWidth, height = ClawTheme.spacing.touchTarget)) {
-              Icon(Icons.Default.Add, contentDescription = nativeString("Add attachment"), tint = ClawTheme.colors.textMuted, modifier = Modifier.size(24.dp))
+            if (!localMode) {
+              IconButton(onClick = onOpenAttachments, enabled = inputEnabled, modifier = Modifier.size(width = iconWidth, height = ClawTheme.spacing.touchTarget)) {
+                Icon(Icons.Default.Add, contentDescription = nativeString("Add attachment"), tint = ClawTheme.colors.textMuted, modifier = Modifier.size(24.dp))
+              }
             }
             Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
               ChatComposerModelPicker(
@@ -3436,7 +3449,7 @@ private fun ChatComposer(
               when (primaryAction) {
                 ChatComposerPrimaryAction.Send -> SendButton(enabled = inputEnabled && sendEnabled, onClick = onSend)
                 ChatComposerPrimaryAction.Stop -> StopButton(onClick = onAbort)
-                ChatComposerPrimaryAction.Talk -> LiveTalkButton(active = false, enabled = inputEnabled && !dictationState.isActive, onClick = { if (ownerReady) onToggleTalk() })
+                ChatComposerPrimaryAction.Talk -> if (!localMode) LiveTalkButton(active = false, enabled = inputEnabled && !dictationState.isActive, onClick = { if (ownerReady) onToggleTalk() })
                 ChatComposerPrimaryAction.None -> Unit
               }
             }

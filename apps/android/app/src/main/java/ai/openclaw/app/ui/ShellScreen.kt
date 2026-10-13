@@ -129,7 +129,8 @@ fun ShellScreen(
   val shellDark = appearanceThemeMode.isDark(systemDark = isSystemInDarkTheme())
   OpenClawSystemBarAppearance(lightAppearance = !shellDark)
   ClawDesignTheme(dark = shellDark, family = appearanceThemeFamily, accentArgb = appearanceAccentArgb ?: gatewayAccentArgb) {
-    val nav = rememberSaveable(saver = ShellNavigation.Saver) { ShellNavigation() }
+    // A persisted local route reopens in chat; the Overview page is Gateway-backed.
+    val nav = rememberSaveable(saver = ShellNavigation.Saver) { ShellNavigation(activeTab = if (viewModel.localModeActive.value) Tab.Chat else Tab.Overview) }
     var commandOpen by rememberSaveable { mutableStateOf(false) }
     var conversationScreenWasActive by rememberSaveable { mutableStateOf(false) }
     val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
@@ -164,6 +165,7 @@ fun ShellScreen(
       val chatSessions by viewModel.chatSessions.collectAsState()
       val chatSessionKey by viewModel.chatSessionKey.collectAsState()
       val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
+      val localModeActive by viewModel.localModeActive.collectAsState()
 
       LaunchedEffect(requestedHomeDestination) {
         val destination = requestedHomeDestination ?: return@LaunchedEffect
@@ -202,7 +204,9 @@ fun ShellScreen(
                   sidebarDrawerState.targetValue == DrawerValue.Closed
               )
           ) &&
-            nav.activeTab != Tab.Overview,
+            nav.activeTab != Tab.Overview &&
+            // Chat is the local route's root; Back from it must not land on the Gateway-backed Overview.
+            !(localModeActive && nav.activeTab == Tab.Chat),
       ) {
         nav.back()
       }
@@ -1221,6 +1225,7 @@ private fun SettingsShellScreen(
   val displayName by viewModel.displayName.collectAsState()
   val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
   val isConnected = gatewayConnectionDisplay.isConnected
+  val localModeActive by viewModel.localModeActive.collectAsState()
   val models by viewModel.providerModelCatalog.collectAsState()
   val providers by viewModel.modelAuthProviders.collectAsState()
   val notificationForwardingEnabled by viewModel.notificationForwardingEnabled.collectAsState()
@@ -1321,18 +1326,29 @@ private fun SettingsShellScreen(
           onClick = { onRouteChange(SettingsRoute.Profile) },
         )
       }
-      item {
-        ClawPanel(contentPadding = PaddingValues(horizontal = ClawTheme.spacing.xs)) {
-          SettingsListRow(
-            title = SettingsRoute.SystemAgent.title,
-            value = nativeText("Setup, status, and repair"),
-            icon = SettingsRoute.SystemAgent.icon,
-            iconTint = ClawTheme.colors.accent,
-            onClick = { onRouteChange(SettingsRoute.SystemAgent) },
+      if (localModeActive) {
+        item {
+          Text(
+            text = nativeString("Other settings need a Gateway. Connect one from Gateway settings."),
+            style = ClawTheme.type.caption,
+            color = ClawTheme.colors.textMuted,
+            modifier = Modifier.fillMaxWidth().padding(vertical = ClawTheme.spacing.xxs),
           )
         }
+      } else {
+        item {
+          ClawPanel(contentPadding = PaddingValues(horizontal = ClawTheme.spacing.xs)) {
+            SettingsListRow(
+              title = SettingsRoute.SystemAgent.title,
+              value = nativeText("Setup, status, and repair"),
+              icon = SettingsRoute.SystemAgent.icon,
+              iconTint = ClawTheme.colors.accent,
+              onClick = { onRouteChange(SettingsRoute.SystemAgent) },
+            )
+          }
+        }
       }
-      settingsSections(settingsRows).forEach { section ->
+      settingsSections(if (localModeActive) settingsRows.filter { it.route.worksWithoutGateway() } else settingsRows).forEach { section ->
         item { SettingsSectionTitle(section.title) }
         items(section.rows, key = { it.route }) { row ->
           SettingsListRow(

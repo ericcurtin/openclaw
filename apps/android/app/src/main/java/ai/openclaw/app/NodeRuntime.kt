@@ -64,6 +64,16 @@ import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.i18n.resolveOptionalNativeText
 import ai.openclaw.app.i18n.verbatimText
+import ai.openclaw.app.local.LOCAL_ADVERTISED_CAPABILITIES
+import ai.openclaw.app.local.LOCAL_ADVERTISED_METHODS
+import ai.openclaw.app.local.LOCAL_MAIN_SESSION_KEY
+import ai.openclaw.app.local.LOCAL_ROUTE_ID
+import ai.openclaw.app.local.LocalApiKeyChange
+import ai.openclaw.app.local.LocalChatBackend
+import ai.openclaw.app.local.LocalChatClient
+import ai.openclaw.app.local.LocalChatRoute
+import ai.openclaw.app.local.LocalModeConfig
+import ai.openclaw.app.local.RoomLocalConversationStore
 import ai.openclaw.app.node.CalendarHandler
 import ai.openclaw.app.node.CallLogHandler
 import ai.openclaw.app.node.CameraCaptureManager
@@ -922,6 +932,19 @@ class NodeRuntime internal constructor(
   val sms = SmsManager(appContext)
   private val json = Json { ignoreUnknownKeys = true }
 
+  // Opt-in local mode: plain chat with a user-configured provider, served through the same
+  // request/event seam ChatController uses for Gateway sockets. It sits beside the Gateway
+  // registry, so no Gateway state is read or written for it.
+  private val localChatBackend =
+    LocalChatBackend(
+      scope = scope,
+      modeStore = prefs.localMode,
+      conversations = RoomLocalConversationStore(appContext),
+      client = LocalChatClient(),
+      emitEvent = { event, payloadJson -> chat.handleGatewayEvent(event, payloadJson) },
+    )
+  private val localChatRoute = LocalChatRoute(localChatBackend, prefs.localMode)
+
   private val voiceWakeManager =
     VoiceWakeManager(
       context = appContext,
@@ -1135,7 +1158,9 @@ class NodeRuntime internal constructor(
     return buildNodeMainSessionKey(deviceId, agentId)
   }
 
-  private val _mainSessionKey = MutableStateFlow(resolveNodeMainSessionKey())
+  // A persisted local route reopens on its own main session instead of a Gateway node session.
+  private val _mainSessionKey =
+    MutableStateFlow(if (mode == NodeRuntimeMode.Live && prefs.localMode.active.value) LOCAL_MAIN_SESSION_KEY else resolveNodeMainSessionKey())
   val mainSessionKey: StateFlow<String> = _mainSessionKey.asStateFlow()
 
   private val _serverName = MutableStateFlow<String?>(null)
@@ -1940,10 +1965,12 @@ class NodeRuntime internal constructor(
           onSessionDeleted = ::publishChatSessionDeletion,
           onOfflineDefaultAgentRestored = { prepareMainSessionKey(it, MainSessionUpdate.Sync) },
           onAssistantReplyFinalized = { owner, runId, text ->
-            if (!_isForeground.value) {
+            // Notification taps and replies resolve a saved Gateway, which the local route is not.
+            if (!_isForeground.value && owner.gatewayStableId != LOCAL_ROUTE_ID) {
               ConversationReplyNotifier(appContext).show(owner, runId, text)
             }
           },
+          localTransport = localChatRoute,
         )
       }
 
@@ -1991,7 +2018,10 @@ class NodeRuntime internal constructor(
    * Stable per-gateway scope for the offline chat cache; resolved per call so cached transcripts
    * never leak across gateways. Null (nothing paired/configured) disables cache reads and writes.
    */
-  private fun chatCacheGatewayId(): String? = connectedEndpoint?.stableId ?: prefs.gatewayRegistry.activeStableId.value
+  private fun chatCacheGatewayId(): String? =
+    if (localRouteActive()) LOCAL_ROUTE_ID else connectedEndpoint?.stableId ?: prefs.gatewayRegistry.activeStableId.value
+
+  private fun localRouteActive(): Boolean = mode == NodeRuntimeMode.Live && localChatRoute.isActive()
 
   private fun chatCacheScope(): ChatCacheScope? =
     chatCacheGatewayId()?.let { gatewayId ->
@@ -2814,9 +2844,10 @@ class NodeRuntime internal constructor(
 
   private var didAutoConnect = false
 
-  @Volatile private var preferredGatewayReconnectSuppressed = initialReconnectSuppressed
+  // Reopening in the local route must not auto-connect a saved Gateway behind the user's back.
+  @Volatile private var preferredGatewayReconnectSuppressed = initialReconnectSuppressed || localRouteActive()
 
-  @Volatile private var secondaryGatewayConnectionsEnabled = !initialReconnectSuppressed
+  @Volatile private var secondaryGatewayConnectionsEnabled = !(initialReconnectSuppressed || localRouteActive())
 
   private fun applyScreenshotFixture() {
     check(BuildConfig.DEBUG) { "Android screenshot fixtures require a debug build" }
@@ -4512,6 +4543,8 @@ class NodeRuntime internal constructor(
     synchronized(gatewayAuthLifecycleLock) {
       if (gatewayAuthResetInProgress) return
     }
+    // Choosing a Gateway always leaves the local route first, so the two never share chat state.
+    leaveLocalRoute()
     // A user-selected connect target must never inherit notification content from another gateway.
     if (gatewayDefaultAgentStableId?.let { it != endpoint.stableId } == true) {
       updateGatewayDefaultAgentId(null)
@@ -4901,9 +4934,15 @@ class NodeRuntime internal constructor(
     }
   }
 
-  fun disconnect() = disconnectGatewayLifecycle(retireRunState = false)
+  fun disconnect() {
+    // The local route has no Gateway connection to stop, and resetting chat scope would blank it.
+    if (!localRouteActive()) disconnectGatewayLifecycle(retireRunState = false)
+  }
 
-  fun prepareForGatewaySetup() = disconnectGatewayLifecycle(retireRunState = true)
+  fun prepareForGatewaySetup() {
+    leaveLocalRoute()
+    disconnectGatewayLifecycle(retireRunState = true)
+  }
 
   private fun disconnectGatewayLifecycle(retireRunState: Boolean) {
     synchronized(gatewayLifecycleIntentLock) {
@@ -4936,6 +4975,72 @@ class NodeRuntime internal constructor(
     prepareDisconnect(retireRunState)
     operatorSession.disconnect()
     nodeSession.disconnect()
+  }
+
+  /** Saves the local endpoint and key. A running local chat picks them up on its next request. */
+  internal fun saveLocalMode(
+    config: LocalModeConfig,
+    apiKey: LocalApiKeyChange,
+  ): Boolean {
+    if (!prefs.localMode.save(config, apiKey)) return false
+    if (localRouteActive()) chat.refresh()
+    return true
+  }
+
+  /**
+   * Focuses the local route. Every Gateway connection stops first, so no Gateway keeps issuing
+   * node commands to this phone while the user chats locally.
+   */
+  internal suspend fun enterLocalMode(): Boolean {
+    if (mode != NodeRuntimeMode.Live || prefs.localMode.config.value == null) return false
+    return gatewaySwitchMutex.withLock {
+      if (localChatRoute.isActive()) return@withLock true
+      prepareForGatewaySetup()
+      localChatRoute.activate()
+      updateMainSessionKey(LOCAL_MAIN_SESSION_KEY)
+      chat.onGatewayScopeChanging(retireRunState = true)
+      chat.prepareMainSessionKey(LOCAL_MAIN_SESSION_KEY)
+      chat.restoreSelectedGatewayOfflineState()
+      true
+    }
+  }
+
+  private fun leaveLocalRoute() {
+    if (!localChatRoute.deactivate()) return
+    scope.launch { localChatBackend.cancelRuns() }
+    updateMainSessionKey(resolveNodeMainSessionKey())
+  }
+
+  /**
+   * Deletes the local setup: the API key and endpoint first (the secrets), then the conversations
+   * and the route-keyed cache and outbox rows. A failed purge is retried at the next launch, because
+   * the staged removal no longer matches any registered Gateway.
+   */
+  internal suspend fun removeLocalMode(): Boolean {
+    if (mode != NodeRuntimeMode.Live) return false
+    return gatewaySwitchMutex.withLock {
+      if (localChatRoute.deactivate()) {
+        scope.launch { localChatBackend.cancelRuns() }
+        updateMainSessionKey(resolveNodeMainSessionKey())
+        chat.onGatewayScopeChanging(retireRunState = true)
+        chat.prepareMainSessionKey(_mainSessionKey.value)
+        chat.restoreSelectedGatewayOfflineState()
+      }
+      if (!prefs.localMode.remove()) return@withLock false
+      runCatching {
+        clientDatabases.stageGatewayRemoval(LOCAL_ROUTE_ID)
+        chat.clearGatewayCache(LOCAL_ROUTE_ID) {
+          clientDatabases.commitGatewayRemoval(LOCAL_ROUTE_ID, requireCacheRemoval = true)
+          externalTranscriptCache?.clearGateway(LOCAL_ROUTE_ID)
+        }
+      }.onFailure { err ->
+        Log.w("OpenClawRuntime", "Local mode cache purge incomplete: ${err::class.java.simpleName}")
+      }
+      runCatching { localChatBackend.removeAllData() }.onFailure { err ->
+        Log.w("OpenClawRuntime", "Local conversation purge incomplete: ${err::class.java.simpleName}")
+      }
+      true
+    }
   }
 
   suspend fun forgetGateway(
@@ -7878,7 +7983,14 @@ class NodeRuntime internal constructor(
     }
   }
 
-  private fun gatewayAdvertisesMethod(method: String): Boolean? = synchronized(gatewayMethodsLock) { gatewayAdvertisedMethods?.let { method in it } }
+  // The local route answers a fixed method set; reporting everything else as unadvertised keeps
+  // Gateway-only RPCs (questions, reactions, branches, ...) from ever being attempted.
+  private fun gatewayAdvertisesMethod(method: String): Boolean? =
+    if (localRouteActive()) {
+      method in LOCAL_ADVERTISED_METHODS
+    } else {
+      synchronized(gatewayMethodsLock) { gatewayAdvertisedMethods?.let { method in it } }
+    }
 
   private fun replaceGatewayCapabilities(capabilities: Set<String>?) {
     synchronized(gatewayMethodsLock) {
@@ -7887,7 +7999,12 @@ class NodeRuntime internal constructor(
     }
   }
 
-  private fun gatewayAdvertisesCapability(capability: String): Boolean? = synchronized(gatewayMethodsLock) { gatewayAdvertisedCapabilities?.let { capability in it } }
+  private fun gatewayAdvertisesCapability(capability: String): Boolean? =
+    if (localRouteActive()) {
+      capability in LOCAL_ADVERTISED_CAPABILITIES
+    } else {
+      synchronized(gatewayMethodsLock) { gatewayAdvertisedCapabilities?.let { capability in it } }
+    }
 
   private fun captureGatewayMethods(): GatewayMethodsSnapshot =
     synchronized(gatewayMethodsLock) {

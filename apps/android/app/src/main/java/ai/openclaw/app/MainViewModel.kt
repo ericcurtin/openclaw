@@ -33,6 +33,10 @@ import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.local.ActiveRouteIdFlow
+import ai.openclaw.app.local.LOCAL_ROUTE_ID
+import ai.openclaw.app.local.LocalApiKeyChange
+import ai.openclaw.app.local.LocalModeConfig
 import ai.openclaw.app.systemagent.SystemAgentChatState
 import ai.openclaw.app.ui.GatewayConnectPlan
 import ai.openclaw.app.ui.GatewaySavedAuthAction
@@ -601,7 +605,12 @@ class MainViewModel internal constructor(
   val pairedGateways: StateFlow<List<GatewayRegistryEntry>> = prefs.gatewayRegistry.entries
   private val pendingTalkSetupMessageMutable = MutableStateFlow<NativeText?>(null)
   val pendingTalkSetupMessage: StateFlow<NativeText?> = pendingTalkSetupMessageMutable
-  val activeGatewayStableId: StateFlow<String?> = prefs.gatewayRegistry.activeStableId
+
+  // Opt-in local mode is its own route beside the Gateways. While focused, its id is the chat identity.
+  internal val localModeConfig: StateFlow<LocalModeConfig?> = prefs.localMode.config
+  internal val localModeActive: StateFlow<Boolean> = prefs.localMode.active
+  internal val localModeHasApiKey: StateFlow<Boolean> = prefs.localMode.hasApiKey
+  val activeGatewayStableId: StateFlow<String?> = ActiveRouteIdFlow(prefs.gatewayRegistry.activeStableId, localModeActive)
   val connectedGatewayStableIds: StateFlow<List<String>> = prefs.gatewayRegistry.connectedStableIds
 
   init {
@@ -1319,6 +1328,61 @@ class MainViewModel internal constructor(
       ensureRuntime().forgetGateway(stableId, isCurrent)
     }
   }
+
+  /**
+   * Saves the local setup and, when [focus] is set, makes local chat the focused route. Completing
+   * first-run setup this way needs no Gateway. The key goes straight to encrypted storage and is
+   * never kept in ViewModel state.
+   */
+  internal fun saveLocalMode(
+    config: LocalModeConfig,
+    apiKey: LocalApiKeyChange,
+    focus: Boolean,
+  ) {
+    launchGatewayConfigOperation {
+      val runtime = ensureRuntime()
+      if (!runtime.saveLocalMode(config, apiKey)) {
+        showLocalModeFailure(nativeString("Could not save the local setup on this phone."))
+        return@launchGatewayConfigOperation
+      }
+      if (!focus) return@launchGatewayConfigOperation
+      if (!runtime.enterLocalMode()) {
+        showLocalModeFailure(nativeString("Could not switch to local chat."))
+        return@launchGatewayConfigOperation
+      }
+      if (!prefs.onboardingCompleted.value) prefs.setOnboardingCompleted(true)
+      _requestedHomeDestination.value = HomeDestination.Chat
+    }
+  }
+
+  /** Focuses an already configured local route from the Gateway selector. */
+  internal fun selectLocalMode() {
+    val runtime = ensureRuntime()
+    if (!canBeginQuickGatewayConnection(runtime)) return
+    launchGatewayConfigOperation {
+      if (runtime.enterLocalMode()) {
+        _requestedHomeDestination.value = HomeDestination.Chat
+      } else {
+        showLocalModeFailure(nativeString("Could not switch to local chat."))
+      }
+    }
+  }
+
+  /** Deletes the local API key, endpoint, conversations, and route-keyed cache and outbox rows. */
+  internal fun removeLocalMode() {
+    launchGatewayConfigOperation {
+      if (ensureRuntime().removeLocalMode()) {
+        clearChatComposerGateway(LOCAL_ROUTE_ID)
+      } else {
+        showLocalModeFailure(nativeString("Could not remove the local setup. Try again."))
+      }
+    }
+  }
+
+  private suspend fun showLocalModeFailure(message: String) =
+    withContext(Dispatchers.Main) {
+      Toast.makeText(nodeApp, message, Toast.LENGTH_LONG).show()
+    }
 
   suspend fun renameGateway(
     stableId: String,

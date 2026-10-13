@@ -131,6 +131,10 @@ internal enum class SidebarDestination(
   Desktop(stableId = "desktop", settingsRoute = SettingsRoute.Desktop),
 }
 
+/** Local mode has no Gateway, so only pages backed by the on-device chat stay in the sidebar. */
+internal fun SidebarDestination.worksWithoutGateway(): Boolean =
+  this == SidebarDestination.Home || this == SidebarDestination.Threads || this == SidebarDestination.Settings
+
 internal fun SidebarDestination.localizedLabel(): String =
   when (this) {
     SidebarDestination.Work -> nativeString("Overview")
@@ -458,7 +462,11 @@ internal fun OpenClawSidebar(
   val pinnedSessions = recentPresentation.pinned
   val recentSections = recentPresentation.recentSections
   val desktopObserveAvailable by viewModel.desktopObserveAvailable.collectAsState()
-  val orderedPages = orderedSidebarDestinations(pageOrder).filter { it.settingsRoute?.isAvailable(desktopObserveAvailable) != false }
+  val localModeActive by viewModel.localModeActive.collectAsState()
+  val orderedPages =
+    orderedSidebarDestinations(pageOrder)
+      .filter { it.settingsRoute?.isAvailable(desktopObserveAvailable) != false }
+      .filter { !localModeActive || it.worksWithoutGateway() }
   val visiblePageIdSet = visiblePageIds.toSet()
   val visiblePages = orderedPages.filter { it.stableId in visiblePageIdSet }
 

@@ -30,6 +30,8 @@ import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveOptionalNativeText
 import ai.openclaw.app.i18n.verbatimText
+import ai.openclaw.app.local.LOCAL_ROUTE_ID
+import ai.openclaw.app.local.LocalChatTransport
 import ai.openclaw.app.node.asArrayOrNull
 import ai.openclaw.app.node.asObjectOrNull
 import ai.openclaw.app.node.asStringOrNull
@@ -248,19 +250,28 @@ class ChatController internal constructor(
     onSessionDeleted: (ChatSessionDeletion) -> Unit = {},
     onOfflineDefaultAgentRestored: (String) -> Unit = {},
     onAssistantReplyFinalized: (owner: ChatComposerOwner, runId: String, text: String) -> Unit = { _, _, _ -> },
+    // Opt-in local mode: while active it serves chat requests instead of the operator session.
+    localTransport: LocalChatTransport? = null,
   ) : this(
     scope = scope,
     json = json,
-    requestGateway = { method, paramsJson -> session.request(method, paramsJson) },
+    requestGateway = { method, paramsJson ->
+      localTransport?.takeIf { it.isActive() }?.request(method, paramsJson) ?: session.request(method, paramsJson)
+    },
     requestGatewayForGateway = { gatewayId, method, paramsJson ->
-      session.requestForEndpoint(gatewayId, method, paramsJson)
+      localTransport?.takeIf { it.isActive() && gatewayId == LOCAL_ROUTE_ID }?.request(method, paramsJson)
+        ?: session.requestForEndpoint(gatewayId, method, paramsJson)
     },
     gatewayAdvertisesMethod = gatewayAdvertisesMethod,
     gatewayAdvertisesCapability = gatewayAdvertisesCapability,
     currentGatewayCatalogRevision = currentGatewayCatalogRevision,
     sessionRouting = { session.sessionRouting },
     captureRequestLease = { gatewayScope ->
-      session.captureRequestLease(gatewayScope?.gatewayId)
+      if (localTransport?.isActive() == true) {
+        localTransport.captureLease(gatewayScope)
+      } else {
+        session.captureRequestLease(gatewayScope?.gatewayId)
+      }
     },
     transcriptCache = transcriptCache,
     cacheScope = cacheScope,

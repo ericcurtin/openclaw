@@ -1,21 +1,22 @@
 ---
-summary: "Android app (node): pairing, connection recovery, chat, voice, and device commands"
+summary: "Android app (node): pairing, connection recovery, chat, voice, device commands, and opt-in local chat without a Gateway"
 read_when:
   - Pairing or reconnecting the Android node
   - Debugging Android Gateway discovery or auth
   - Mirroring or controlling an Android device from a remote Mac
   - Verifying chat history parity across clients
+  - Using the Android app without a Gateway (local mode)
 title: "Android app"
 ---
 
 <Note>
-The official Android app is available on [Google Play](https://play.google.com/store/apps/details?id=ai.openclaw.app&hl=en_IN) and, for sideloading, as a signed standalone APK on selected [GitHub Releases](https://github.com/openclaw/openclaw/releases). Not every release includes the APK and checksum. See [Install outside Google Play](/platforms/android#install-outside-google-play) to find and verify both files. It is a companion node and requires a running OpenClaw Gateway. Source: [apps/android](https://github.com/openclaw/openclaw/tree/main/apps/android) ([build instructions](https://github.com/openclaw/openclaw/blob/main/apps/android/README.md)).
+The official Android app is available on [Google Play](https://play.google.com/store/apps/details?id=ai.openclaw.app&hl=en_IN) and, for sideloading, as a signed standalone APK on selected [GitHub Releases](https://github.com/openclaw/openclaw/releases). Not every release includes the APK and checksum. See [Install outside Google Play](/platforms/android#install-outside-google-play) to find and verify both files. It is a companion node: a running OpenClaw Gateway is required for everything except the opt-in [local chat mode](/platforms/android#local-mode-without-a-gateway), which talks to a model provider directly and has no tools. Source: [apps/android](https://github.com/openclaw/openclaw/tree/main/apps/android) ([build instructions](https://github.com/openclaw/openclaw/blob/main/apps/android/README.md)).
 </Note>
 
 ## Support snapshot
 
 - Role: companion node app (Android does not host the Gateway).
-- Gateway required: yes (run it on macOS, Linux, or Windows via WSL2).
+- Gateway required: yes (run it on macOS, Linux, or Windows via WSL2), except for the opt-in plain chat in [local mode](/platforms/android#local-mode-without-a-gateway).
 - Install: [Google Play](https://play.google.com/store/apps/details?id=ai.openclaw.app&hl=en_IN) or `OpenClaw-Android.apk` from a [GitHub Release](https://github.com/openclaw/openclaw/releases) that lists both required assets (see [Install outside Google Play](/platforms/android#install-outside-google-play)), [Getting Started](/start/getting-started) for the Gateway, then [Pairing](/channels/pairing).
 - Gateway: [Runbook](/gateway) + [Configuration](/gateway/configuration).
   - Protocols: [Gateway protocol](/gateway/protocol) (nodes + control plane).
@@ -83,6 +84,39 @@ when you switch away and back. Finish recording, stop dictation or Talk, and let
 media imports or pending send admission finish before using the quick picker.
 The composer stays protected during handoff, but a committed offline Gateway
 remains usable without waiting for a network connection.
+
+<a id="local-mode-without-a-gateway" />
+
+## Local mode (no Gateway)
+
+Local mode lets you try the app before you set up a Gateway: you chat with a model provider straight from the phone. It is a ramp to a Gateway, not a replacement for one. It is **off by default**, and existing Gateway setups behave exactly as before until you choose it.
+
+Enter it explicitly from either place a Gateway is added:
+
+- First-run setup: on **Connect Gateway**, tap **Use without a Gateway**.
+- After setup: **Settings → Gateway → Add Gateway → Use without a Gateway**.
+
+Then enter:
+
+- **Base URL** of any OpenAI-compatible endpoint, including its version path (for example `https://api.openai.com/v1` or `https://openrouter.ai/api/v1`). The app calls `<base URL>/chat/completions` with streaming. Ollama, llama.cpp, and LM Studio servers on your network use the same form, for example `http://192.168.1.20:11434/v1`.
+- **Model** name your provider expects.
+- **API key** (optional for local servers). Anthropic's Messages API is not supported yet; use an OpenAI-compatible endpoint such as OpenRouter.
+
+Local mode appears as its own route in the Gateway selector (**Local chat**), next to your saved Gateways. It is not an entry in the Gateway registry, so no Gateway credential, device token, or TLS pin is ever read or written for it. Choosing it stops every Gateway connection first, so no Gateway can send node commands to the phone while you chat locally. Choosing a Gateway leaves local mode. Its cache, queued sends, and drafts use their own route identity, and its conversations live in their own on-device database, so state is never mixed with a Gateway's.
+
+**What you get:** plain text chat with streaming replies, several local conversations, rename and delete, and the same transcript, composer, and offline-queue behavior as Gateway chat. Dictation into the draft still works.
+
+**What you do not get.** Local mode has no tools, approvals, sandboxing, memory, channels, or automations, and connecting a Gateway unlocks them. The model is offered nothing but your message text: no shell or exec, no file access, no web fetch, and no phone-native commands such as contacts, SMS, calendar, notifications, camera, or location. Attachments, voice notes, and Talk are hidden, the model name is read-only (change it in the local setup), and reasoning controls and the Dashboard are unavailable. Pages that need a Gateway (Overview, Skills, Agents, Automations, Usage, Dreaming, Terminal, Desktop, approvals, and the rest of Settings) are hidden or show **This needs a Gateway**. Chat shows this notice at the top, with a **Connect a Gateway** button.
+
+**Security model:**
+
+- `https` is required for every host except private networks. Cleartext `http` is allowed only for private LAN addresses, `.local` hosts, `localhost`, `127.0.0.1`, and the emulator bridge `10.0.2.2`, the same rules as Gateway endpoints. Tailscale addresses need `https`. Redirects are not followed.
+- The API key is stored only in the app's encrypted storage, the same design as Gateway credentials. The field is masked and requests password input with autocorrection disabled, which does not guarantee how a third-party keyboard learns from input. The key never appears in a URL, a log, the transcript cache, the send queue, or diagnostics output, and it is excluded from backup with the rest of the app's private data. It leaves the phone only as the `Authorization` header to the base URL you configured.
+- Provider error text is shown in chat with the key removed. Authentication failures (401 and 403) never show the provider's text.
+- **Settings → Gateway → Local mode → Remove** deletes the endpoint, the key, the local conversations, and the route's cached and queued rows.
+- Your messages go to the provider you configure and are stored unencrypted in the app's private storage on the phone. Choose a provider you trust with them.
+
+**Limits in this release:** the whole conversation is sent on every turn with no truncation, so a long chat can reach the model's context limit and show the provider's error. Local conversations are not migrated into a Gateway when you connect one. They are stored as ordered plain-text turns (role, text, time, and the client idempotency key), a shape a later release can replay into a Gateway session.
 
 ## Dictation and attachments
 
@@ -361,7 +395,7 @@ In the Android app:
 - After setup, open **Settings → Gateway**. **Add Gateway** lets you scan or paste a setup code, or connect to a discovered Gateway.
 - If discovery is blocked, use **Manual Gateway** on that page: enter the host and port, select **Connection security**, and tap **Save & Connect**. Private LAN hosts support `ws://`; for Tailscale/public hosts, use **Secure (TLS)** with a `wss://` / Tailscale Serve endpoint.
 
-Gateway tokens, bootstrap tokens, passwords, and setup codes are masked and accept paste. The app requests password input with autocorrection disabled, but cannot guarantee how a third-party keyboard stores or learns from input.
+Gateway tokens, bootstrap tokens, passwords, and setup codes are masked and accept paste. The app requests password input with autocorrection disabled, but cannot guarantee how a third-party keyboard stores or learns from input. The optional [local mode](/platforms/android#local-mode-without-a-gateway) API key uses the same masked input and encrypted storage.
 
 After the first successful pairing, Android auto-reconnects on launch to the active paired Gateway (best-effort for discovered Gateways, which must be visible on the network).
 

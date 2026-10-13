@@ -78,6 +78,11 @@ internal fun SidebarGatewayControl(
 ) {
   val entries by viewModel.pairedGateways.collectAsState()
   val handoff by viewModel.gatewayConnectionHandoff.collectAsState()
+  val localActive by viewModel.localModeActive.collectAsState()
+  val localConfig by viewModel.localModeConfig.collectAsState()
+  // Local mode is its own route beside the saved Gateways; it is never one of the registry entries.
+  val localConfigured = localConfig != null
+  val routeCount = entries.size + if (localConfigured) 1 else 0
   val focused = entries.firstOrNull { it.stableId == handoff.focusedStableId }
   val activity = LocalActivity.current
   val host = LocalView.current
@@ -93,8 +98,13 @@ internal fun SidebarGatewayControl(
   DisposableEffect(activity, host, lifecycle) {
     onDispose { opening?.revoke() }
   }
-  LaunchedEffect(entries.size) { if (entries.size <= 1) dismiss() }
-  val label = if (entries.isEmpty()) nativeString("Add Gateway") else focused?.displayName ?: nativeString("Gateways")
+  LaunchedEffect(routeCount) { if (routeCount <= 1) dismiss() }
+  val label =
+    when {
+      localActive -> nativeString("Local chat")
+      routeCount == 0 -> nativeString("Add Gateway")
+      else -> focused?.displayName ?: nativeString("Gateways")
+    }
   Row(
     modifier =
       Modifier
@@ -102,9 +112,9 @@ internal fun SidebarGatewayControl(
         .heightIn(min = 56.dp)
         .testTag("sidebar-gateway-control")
         .clickable(role = Role.Button) {
-          if (entries.isEmpty()) {
+          if (routeCount == 0) {
             viewModel.openGatewayAddition()
-          } else if (entries.size == 1) {
+          } else if (routeCount == 1) {
             openSettings()
           } else if (opening == null) {
             var next: FoldAwareSheetState? = null
@@ -123,14 +133,16 @@ internal fun SidebarGatewayControl(
     Icon(Icons.Outlined.Storage, contentDescription = null, tint = palette.muted, modifier = Modifier.size(20.dp))
     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
       Text(label, style = ClawTheme.type.body, color = palette.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-      if (entries.isNotEmpty()) {
+      if (localActive) {
+        LocalRouteStatus(palette)
+      } else if (entries.isNotEmpty()) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
           GatewayStatus(connection, palette, Modifier.weight(1f, fill = false))
           Text(savedGatewayCount(entries.size), style = ClawTheme.type.caption, color = palette.muted, maxLines = 1)
         }
       }
     }
-    if (entries.size > 1) {
+    if (routeCount > 1) {
       Icon(Icons.Default.UnfoldMore, contentDescription = null, tint = palette.muted, modifier = Modifier.size(20.dp))
     }
   }
@@ -140,6 +152,8 @@ internal fun SidebarGatewayControl(
         geometry = geometry,
         palette = palette,
         entries = entries,
+        localConfigured = localConfigured,
+        localActive = localActive,
         focusedStableId = handoff.focusedStableId,
         connection = connection,
         selectionEnabled = !handoff.pending,
@@ -148,6 +162,12 @@ internal fun SidebarGatewayControl(
           if (geometry.refresh()) {
             dismiss()
             viewModel.switchGatewayFromSidebar(stableId)
+          }
+        },
+        onSelectLocal = {
+          if (geometry.refresh()) {
+            dismiss()
+            viewModel.selectLocalMode()
           }
         },
         onAdd = { if (geometry.refresh()) viewModel.openGatewayAddition() },
@@ -170,11 +190,14 @@ private fun GatewayPickerSheet(
   geometry: FoldAwareSheetState,
   palette: SidebarPalette,
   entries: List<GatewayRegistryEntry>,
+  localConfigured: Boolean,
+  localActive: Boolean,
   focusedStableId: String?,
   connection: GatewayConnectionDisplay,
   selectionEnabled: Boolean,
   onDismiss: () -> Unit,
   onSelect: (String) -> Unit,
+  onSelectLocal: () -> Unit,
   onAdd: () -> Unit,
   openSettings: () -> Unit,
 ) {
@@ -271,7 +294,7 @@ private fun GatewayPickerSheet(
                 }
               }
               items(visible, key = GatewayRegistryEntry::stableId) { entry ->
-                val selected = entry.stableId == focusedStableId
+                val selected = !localActive && entry.stableId == focusedStableId
                 Row(
                   modifier =
                     Modifier
@@ -297,6 +320,31 @@ private fun GatewayPickerSheet(
                   if (selected) Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(20.dp))
                 }
               }
+              if (localConfigured) {
+                item(key = "local-route") {
+                  Row(
+                    modifier =
+                      Modifier
+                        .padding(horizontal = 12.dp, vertical = 2.dp)
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(ClawTheme.radii.row))
+                        .background(if (localActive) palette.selection else Color.Transparent)
+                        .selectable(selected = localActive, enabled = selectionEnabled, role = Role.RadioButton, onClick = onSelectLocal)
+                        .heightIn(min = 64.dp)
+                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                        .testTag("gateway-picker-local"),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                  ) {
+                    Icon(Icons.Outlined.Storage, contentDescription = null, tint = palette.muted, modifier = Modifier.size(20.dp))
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                      Text(nativeString("Local chat"), style = ClawTheme.type.body, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                      Text(nativeString("On this phone, no Gateway"), style = ClawTheme.type.caption, color = palette.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    if (localActive) Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(20.dp))
+                  }
+                }
+              }
               if (scrollControls) item(key = "manage") { manage() }
             }
             if (!scrollControls) manage()
@@ -304,6 +352,20 @@ private fun GatewayPickerSheet(
         }
       }
     }
+  }
+}
+
+@Composable
+private fun LocalRouteStatus(palette: SidebarPalette) {
+  Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+    Box(
+      Modifier
+        .size(6.dp)
+        .clip(CircleShape)
+        .background(ClawTheme.colors.success)
+        .clearAndSetSemantics {},
+    )
+    Text(nativeString("Plain chat on this phone"), style = ClawTheme.type.caption, color = palette.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
   }
 }
 
