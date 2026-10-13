@@ -305,17 +305,14 @@ function projectSpokenReplyContent(message: AssistantReplayMessage): AssistantRe
   ) {
     return message;
   }
-  const projected = [...content];
+  const projected = [...message.content];
   const textIndex = blocks.findIndex((block) => block?.type === "text");
   projected[textIndex < 0 ? projected.length : textIndex] = {
     ...blocks[textIndex],
     type: "text",
     text: spoken,
   };
-  return replaceCompactionReplayOwnerContent(
-    message,
-    projected as AssistantReplayMessage["content"],
-  );
+  return replaceCompactionReplayOwnerContent(message, projected);
 }
 
 function normalizeAssistantReplayMessage(
