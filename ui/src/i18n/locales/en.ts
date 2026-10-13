@@ -630,6 +630,8 @@ export const en: TranslationMap & {
     },
     sidebar: {
       campaignTarget: "{status} · {target}",
+      checking: "Checking for updates…",
+      checkFailed: "Could not check the latest update. Try again.",
       updating: "Updating Gateway…",
       availableTitle: "Update available",
       availableSummary: "A newer revision is ready.",
@@ -786,6 +788,7 @@ export const en: TranslationMap & {
     copyLink: "Copy link",
     archiveSessionOnly: "Session only",
     communication: {
+      title: "Cross-session messaging",
       send: "Send messages",
       receive: "Receive messages",
       always: "Always",
@@ -965,6 +968,11 @@ export const en: TranslationMap & {
     unread: "Unread",
     automationAttached: "Automation attached",
     incognito: "Incognito session",
+    incognitoLabel: "Incognito",
+    incognitoDescription:
+      "Incognito session. History expires 24 hours after creation or when the Gateway restarts, whichever comes first.",
+    incognitoLimits:
+      "Your model provider still processes messages. Tools, plugins, and uploads may save data.",
     cloudWorkerPlacement: "Placement: {state}",
     placementWorkspaceConflict: "{placement} · 1 workspace conflict",
     placementWorkspaceConflicts: "{placement} · {count} workspace conflicts",
@@ -2051,6 +2059,28 @@ export const en: TranslationMap & {
     sessionRestarted:
       "{error} OpenClaw started a fresh session; earlier messages remain for context.",
     unsupportedGateway: "Update the Gateway to continue setup with OpenClaw.",
+    autoSetup: {
+      title: "AI setup",
+      connecting: "Connecting your AI...",
+      verifying: "Checking a real conversation. This may take a minute or more.",
+      using: "Using {label} ({modelRef}) on {gateway}",
+      thisComputer: "This computer",
+      thisGateway: "this Gateway",
+      alternatives: "Or use another AI",
+      signInTitle: "Connect ChatGPT to get started",
+      signInBody: "OpenClaw is ready to connect your ChatGPT account.",
+      signIn: "Sign in with ChatGPT",
+      startingSignIn: "Opening ChatGPT sign-in...",
+      unavailableTitle: "Your AI needs a little help",
+      unavailableBody: "OpenClaw could not connect an AI automatically.",
+      nativeSetup: "Open AI setup",
+      commandHint: "To connect an AI, run",
+      differentGateway: "Use a different Gateway",
+      reviewPermissions: "Review permissions",
+      failed: "OpenClaw could not finish AI setup. Try again.",
+      safety:
+        "OpenClaw can take actions using the permissions and services you enable. Review prompts and only connect tools you trust.",
+    },
     panel: {
       title: "OpenClaw",
       toggle: "Toggle Ask OpenClaw",
@@ -2818,11 +2848,8 @@ export const en: TranslationMap & {
     },
     waitingForApproval: "Waiting for approval…",
     waitingOnSubagents: "Waiting on subagents",
-    waitingOnSubagentCount: "Waiting on {count} subagent",
-    waitingOnSubagentsCount: "Waiting on {count} subagents",
+    turnElapsed: "Total time since your message, including subagent waits",
     waitingOnSubagent: "Waiting on {name}",
-    waitingOnSession: "Waiting on 1 session",
-    waitingOnSessionsCount: "Waiting on {count} sessions",
     subagentsRunning: "{count} subagents running",
     subagentsRunningOne: "1 subagent running",
     startupStatus: {
@@ -3000,7 +3027,7 @@ export const en: TranslationMap & {
       copyPublicLink: "Copy public link",
       publicConfirmTitle: "Make this session world-readable?",
       publicConfirmMessage:
-        "Anyone with the public link can read existing and future conversation text without signing in. Tools, reasoning, files, and widgets are excluded. Review the conversation for private information before sharing. Disabling access cannot recall copies already downloaded.",
+        "Anyone with the public link can read existing and future conversation text, including all user and assistant messages and progress, plus tool names, short argument summaries, and images without signing in.\n\nReasoning, tool-result text, and private dashboards stay hidden. Image contents are not redacted. Review for private information before sharing; disabling access cannot recall downloaded copies.",
       publicConfirmEnable: "Make public",
       publicEnabled: "Public access enabled. Copy the public link from Session sharing.",
       publicDisabled: "Public access disabled.",
@@ -3069,7 +3096,6 @@ export const en: TranslationMap & {
       copyPath: "Copy path",
       copyBranch: "Copy branch name",
       copied: "Copied",
-      incognito: "Incognito session",
       branches: "Versions",
       versionsHelpLabel: "About versions",
       versionsHelp:
@@ -3496,6 +3522,8 @@ export const en: TranslationMap & {
       draftConflict: "This question was edited in another tab. Copy your answer before reloading.",
     },
     questions: {
+      showSecret: "Show secret",
+      hideSecret: "Hide secret",
       resourcePreview: "Preview resource",
       addResources: "Add resources",
       resourceUploadTooLarge: "Selected resources exceed the upload limits.",
@@ -3720,7 +3748,6 @@ export const en: TranslationMap & {
     },
     composer: {
       running: "running",
-      viewSubagents: "View",
       composerInput: "Chat composer",
       emojiSuggestions: "Emoji suggestions",
       placeholder: "Message {name}",
@@ -3737,6 +3764,8 @@ export const en: TranslationMap & {
       compactingContext: "Compacting context...",
       contextCompacted: "Context compacted",
       fallbackActive: "Fallback active: {model}",
+      modelFallbackEvent: "Model fallback: {from} → {to}",
+      modelRestoredEvent: "Returned to selected model: {from} → {to}",
       fallbackCleared: "Fallback cleared: {model}",
       fallbackSelected: "Selected: {model}",
       fallbackCurrent: "Active: {model}",

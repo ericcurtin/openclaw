@@ -3,6 +3,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+  captureSessionActorStorageOwner,
   getSessionActorStorageBinding,
   runWithSessionActorStorage,
   type SessionActorStorageBinding,
@@ -44,7 +45,6 @@ import { withSubagentSessionSource } from "./subagent-session-source.js";
 import type { SpawnSubagentParams } from "./subagent-spawn-contract.js";
 import type { resolveSubagentModelAndThinkingPlan } from "./subagent-spawn-plan.js";
 import {
-  loadSessionEntry,
   emitSessionLifecycleEvent,
   resolveGatewaySessionStoreTargetInWorker,
   upsertSessionEntryCore,
@@ -253,7 +253,35 @@ export async function createInitialSubagentSession(input: {
                 actor: await parentMemory.actor.storage!.acquire(params.childSessionKey),
               };
             } else {
-              throw new Error("Incognito child actor is unavailable");
+              const selected = captureSessionActorStorageOwner({
+                agentId: params.targetAgentId,
+                sessionKey: params.childSessionKey,
+                sessionActor: parentMemory,
+              });
+              if (!selected?.owner) {
+                throw new Error("Incognito child actor is unavailable");
+              }
+              const actor = await selected.owner.acquire(
+                { database: selected.owner.identity, sessionKey: params.childSessionKey },
+                {
+                  assertCurrent() {
+                    parentMemory.actor.assertCurrent();
+                    parentMemory.authority.assertCurrent();
+                    params.assertActive?.();
+                  },
+                  assertReadable() {
+                    parentMemory.actor.assertReadable();
+                    parentMemory.authority.assertCurrent();
+                    params.assertActive?.();
+                  },
+                },
+              );
+              childMemory = {
+                actor,
+                authority: selected.authority,
+                agentId: selected.agentId,
+                path: selected.path,
+              };
             }
           }
           const childBinding =
@@ -353,17 +381,12 @@ export async function createInitialSubagentSession(input: {
               if (parentBinding) {
                 assertParentActorCurrent();
               }
-              if (!parentMemory && !parentBinding && !expected) {
+              if (!parentMemory && !parentBinding) {
                 return;
               }
               const latest = parentMemory
                 ? parentMemory.actor.snapshot(parentMemory.authority)?.entry
-                : parentBinding
-                  ? parentBinding.actor.sessions.readPolicy(parentTarget.canonicalKey)
-                  : loadSessionEntry({
-                      storePath: parentStorePath,
-                      sessionKey: parentTarget.canonicalKey,
-                    });
+                : parentBinding?.actor.sessions.readPolicy(parentTarget.canonicalKey);
               if (
                 (latest === undefined) !== (expected === undefined) ||
                 fields.some((field) => !isDeepStrictEqual(latest?.[field], expected?.[field]))

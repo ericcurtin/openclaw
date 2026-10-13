@@ -8,7 +8,7 @@ import {
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
-import { getRuntimeConfig } from "../../config/config.js";
+import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../config/config.js";
 import {
   patchSessionEntryCore,
   replaceSessionEntry,
@@ -20,7 +20,9 @@ import {
   beginSessionWorkAdmission,
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
+import { invalidateAgentDeletionJournalStatus } from "../../state/agent-deletion-journal-status.js";
 import * as deletionJournals from "../../state/agent-deletion-journal.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -62,6 +64,7 @@ it.each(["rollback", "rollback during recovery"] as const)(
           },
         },
       });
+      await captureRuntimeConfigAsyncReader()();
       const scope = { agentId: "doomed", env: state.env, sessionKey: "agent:doomed:pending" };
       await expect(
         replaceSessionEntry(scope, { sessionId: "pending", updatedAt: 1 }),
@@ -335,6 +338,10 @@ it.each(authorityLossCases)(
                 "DELETE FROM state_leases WHERE scope = 'core:agent-deletion' AND lease_key = 'doomed'",
             }[transition];
             changedRows = foreign.prepare(sql).run().changes;
+            invalidateAgentDeletionJournalStatus(
+              openOpenClawStateDatabase({ env: state.env }).db,
+              "doomed",
+            );
           };
           const authorize = () => {
             try {

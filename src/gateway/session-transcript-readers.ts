@@ -1,13 +1,18 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readSessionTranscriptBoundedMessageTailPageFromProjection } from "../config/sessions/session-accessor.sqlite-active-events-read.js";
 import {
   isSessionTranscriptProjectionUnavailableError,
+  readRecentSessionTranscriptMessageEvents,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.sqlite-active-events.js";
 import { withCurrentProjectionSnapshot } from "../config/sessions/session-accessor.sqlite-active-projection.js";
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-contract.js";
 import type { SessionTranscriptBoundedMessageTailOptions } from "../config/sessions/session-accessor.sqlite-projection-read.js";
 import { bindSessionTranscriptStoreScope } from "../config/sessions/session-accessor.transcript-target.js";
-import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
+import {
+  captureSessionActorStorageOwner,
+  getSessionActorStorageBinding,
+} from "../config/sessions/session-actor-storage-binding.js";
 import { captureSessionActorTranscriptRead } from "../config/sessions/session-actor-transcript-read.js";
 import { readRestoredSessionTranscript } from "../config/sessions/session-cold-storage-read.js";
 import { captureIncognitoSessionHistoryBinding } from "../config/sessions/session-incognito-binding.js";
@@ -31,6 +36,7 @@ import {
   createIncognitoSessionHistoryReader,
   type IncognitoSessionHistoryReader,
 } from "./session-history-snapshot.js";
+import { aggregateSessionTranscriptUsage } from "./session-transcript-derived-readers.js";
 import { createSessionActorTranscriptReader } from "./session-transcript-memory-reader.js";
 import {
   createSessionTranscriptReader,
@@ -337,6 +343,42 @@ export const readRecentSessionMessagesWithStatsAsync = createHistoryPageReader(
   (reader, scope, options) => reader.readRecentSessionMessagesWithStatsAsync(scope, options),
 );
 
+const readRecentSessionUsage = createHistoryPageReader(
+  async (target, maxBytes: number) =>
+    aggregateSessionTranscriptUsage(
+      readRecentSessionTranscriptMessageEvents(target, {
+        maxBytes,
+        maxLines: 1000,
+        maxMessages: 1000,
+      }).events.map(({ event }) => {
+        const record = asOptionalRecord(event);
+        return record?.type === "message" ? record.message : undefined;
+      }),
+    ),
+  async (read, target, maxBytes) => read({ kind: "recent-usage", params: { target, maxBytes } }),
+  async (reader, target, maxBytes) =>
+    aggregateSessionTranscriptUsage(
+      (
+        await reader.readRecentSessionMessagesWithStatsAsync(target, {
+          maxBytes,
+          maxLines: 1000,
+          maxMessages: 1000,
+        })
+      ).messages,
+    ),
+);
+
+/** Prepare bounded usage in the history owner before rendering a status response. */
+export async function readRecentSessionUsageFromTranscriptAsync(
+  scope: SessionTranscriptReadScope,
+  maxBytes: number,
+) {
+  return readRecentSessionUsage(
+    scope,
+    Math.max(1024, Math.floor(Number.isFinite(maxBytes) ? maxBytes : 8 * 1024 * 1024)),
+  );
+}
+
 export const readSessionMessagesPageWithStatsAsync = createHistoryPageReader(
   sessionTranscriptReader.readSessionMessagesPageWithStatsAsync,
   (read, target, options, signal) =>
@@ -530,42 +572,33 @@ export async function readSessionMessageCountAsync(
 export async function readSessionReactionsAsync(scope: SessionTranscriptReadScope) {
   const selected = getSessionActorStorageBinding({});
   if (selected && (!scope.sessionKey || isIncognitoSessionKey(scope.sessionKey))) {
-    const agentId =
-      scope.agentId ??
-      (scope.sessionKey ? resolveAgentIdFromSessionKey(scope.sessionKey) : selected.agentId);
-    if (agentId !== selected.agentId) {
-      return {};
-    }
-    getSessionActorStorageBinding({ ...scope, sessionKey: undefined });
+    const namespace = captureSessionActorStorageOwner(scope)!;
     const sessionKey =
       scope.sessionKey ??
-      selected.actor.storage.readCurrent(
-        { type: "session.entry.readById", input: { sessionId: scope.sessionId } },
-        selected.authority,
-      )?.sessionKey;
+      (namespace.agentId === selected.agentId
+        ? selected.actor.storage!.readCurrent(
+            { type: "session.entry.readById", input: { sessionId: scope.sessionId } },
+            selected.authority,
+          )?.sessionKey
+        : namespace.owner?.readSessionById(scope.sessionId, namespace.authority)?.sessionKey);
     if (!sessionKey) {
       return {};
     }
-    const direct = sessionKey === selected.actor.target.sessionKey;
-    if (
-      !direct &&
-      !selected.actor.storage.readCurrent(
-        { type: "session.entry.read", input: { sessionKey } },
-        selected.authority,
-      )
-    ) {
-      return {};
-    }
+    const direct =
+      namespace.agentId === selected.agentId && sessionKey === selected.actor.target.sessionKey;
     const actor = direct
       ? selected.actor
-      : await selected.actor.storage.acquire(sessionKey, {
+      : await namespace.owner?.acquireExisting(sessionKey, {
           assertCurrent: () => selected.actor.assertReadable(),
           assertReadable: () => selected.actor.assertReadable(),
         });
+    if (!actor) {
+      return {};
+    }
     try {
       return await actor.storage!.read(
         { type: "session.reactions.read", input: { sessionId: scope.sessionId } },
-        selected.authority,
+        namespace.authority,
       );
     } finally {
       if (!direct) {
