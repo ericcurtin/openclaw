@@ -24,6 +24,7 @@ export function buildMessagingSection(params: {
   isMinimal: boolean;
   availableTools: Set<string>;
   inlineButtonsEnabled: boolean;
+  customInlineButtonHint?: boolean;
   runtimeChannel?: string;
   runtimeChatType?: ChatType;
   messageChannelOptions?: string;
@@ -66,9 +67,7 @@ export function buildMessagingSection(params: {
       "",
     ];
   }
-  // These channels render their own button shapes and describe them through messageToolHints.
-  const showGenericInlineButtonHint =
-    params.runtimeChannel !== "slack" && params.runtimeChannel !== "mattermost";
+  const showGenericInlineButtonHint = !params.customInlineButtonHint;
   const groupMessageToolOnly =
     messageToolOnly && (params.runtimeChatType === "group" || params.runtimeChatType === "channel");
   const hasSessionsSpawn = params.availableTools.has("sessions_spawn");

@@ -238,6 +238,7 @@ describe("buildAgentSystemPrompt", () => {
         toolNames: ["message"],
         runtimeInfo: {
           channel: "slack",
+          customInlineButtonHint: true,
         },
         messageToolHints: [
           "- Use `presentation` buttons/selects for discrete choices or parameter picks instead of asking the user to type one.",
@@ -247,14 +248,18 @@ describe("buildAgentSystemPrompt", () => {
       ["Inline buttons not enabled for slack", 'presentation={"blocks":[{"type":"buttons"'],
     ],
     [
-      "leaves Mattermost button guidance to the plugin hints",
+      "leaves custom button guidance to the plugin regardless of channel",
       {
         toolNames: ["message"],
-        runtimeInfo: { channel: "mattermost", capabilities: ["inlineButtons"] },
-        messageToolHints: ["- Mattermost owns this hint."],
+        runtimeInfo: {
+          channel: "custom",
+          capabilities: ["inlineButtons"],
+          customInlineButtonHint: true,
+        },
+        messageToolHints: ["- Custom button guidance."],
       },
-      ["- Mattermost owns this hint."],
-      ['"action":{"type":"callback"', "Inline buttons OFF for mattermost"],
+      ["- Custom button guidance."],
+      ['"action":{"type":"callback"', "Inline buttons OFF"],
     ],
   ])("%s", expectPromptCase);
   it("advertises YouTube embeds only in full webchat prompts below the cache boundary", () => {
