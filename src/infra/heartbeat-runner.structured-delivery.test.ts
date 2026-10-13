@@ -39,6 +39,7 @@ import {
 import { isRetryableHeartbeatSkipReason } from "./heartbeat-wake.js";
 import { resetSystemEventsForTest } from "./system-events.js";
 
+// mock-isolation: Keep speech policy and synthesis real while isolating live guards and audio persistence.
 vi.mock("../tts/tts.runtime.js", async () => {
   const { maybeApplyTtsToPayloadCore } = await import("../tts/tts-payload.js");
   return {
