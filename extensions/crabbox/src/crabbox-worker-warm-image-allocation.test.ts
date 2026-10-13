@@ -131,6 +131,58 @@ describe("Crabbox durable allocation admission", () => {
     expect(store.lookup("unrelated")).toBeUndefined();
   });
 
+  it.each([
+    { providerState: "missing", retired: true },
+    { providerState: "available", retired: false },
+  ])(
+    "after a failed fork, retires the image only when it is $providerState",
+    async ({ providerState, retired }) => {
+      let forkFails = false;
+      const { manager, context, calls } = fixture(false, (argv) => {
+        if (!forkFails) {
+          return undefined;
+        }
+        if (argv[2] === "fork") {
+          return commandResult({ code: 2, stderr: `checkpoint ${CHECKPOINT_ID} not found` });
+        }
+        return argv[2] === "inspect"
+          ? commandResult({
+              stdout: JSON.stringify({
+                localState: "metadata_available",
+                providerState,
+                nextAction: providerState === "missing" ? "forget" : "fork_or_delete",
+              }),
+            })
+          : undefined;
+      });
+      const owner = manager();
+      const source = context("cbx_source");
+      await owner.allocate(source);
+      await owner.markEnrolled(source.id);
+      await owner.capture(source);
+      await owner.release(source);
+      forkFails = true;
+
+      const failed = context("cbx_failed");
+      await expect(owner.allocate(failed)).rejects.toThrow("not found");
+      expect(openWarmImageStore().entries()[0]?.value.operation).toEqual(
+        retired ? { type: "retire", checkpointId: CHECKPOINT_ID } : undefined,
+      );
+
+      if (!retired) {
+        return;
+      }
+      calls.length = 0;
+      expect(await owner.allocate(context("cbx_next"))).toEqual({ kind: "cold" });
+      expect(calls.some((argv) => argv[2] === "fork")).toBe(false);
+      // The failed lease still holds the checkpoint, so deletion waits for its release.
+      expect(calls.some((argv) => argv[2] === "delete")).toBe(false);
+      await owner.release(failed);
+      expect(calls.some((argv) => argv[2] === "delete" && argv[3] === CHECKPOINT_ID)).toBe(true);
+      expect(openWarmImageStore().entries()[0]?.value.image).toBeUndefined();
+    },
+  );
+
   it("returns false and permits enrollment only after an unsupported capture receipt settles its claim", async () => {
     const { manager, context } = fixture(false, (argv) =>
       argv[2] === "create"
