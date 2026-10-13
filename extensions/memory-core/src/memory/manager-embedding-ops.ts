@@ -29,7 +29,6 @@ import { readSessionResetRecallCutoffMetadata } from "../session-reset-recall-me
 import type { EmbeddingProvider } from "./embeddings.js";
 import type { IndexedMemoryChunk } from "./manager-chunk-writer.js";
 import { prepareMemoryIndexInWorker } from "./manager-cpu-worker-runtime.js";
-import { readMemoryDatabaseRevision } from "./manager-db-kernel.js";
 import {
   MemoryManagerEmbeddingCacheOps,
   type MemoryEmbeddingCacheCandidate,
@@ -150,7 +149,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     const database = this.database;
     const generation = {
       database,
-      databaseRevision: readMemoryDatabaseRevision(database.db),
       cacheWritesInvalidated: false,
       providerKey,
       identities,
@@ -203,7 +201,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
       candidates,
       generation,
     );
-    this.assertEmbeddingCacheGenerationCurrent(generation);
     if (missing.length === 0) {
       return embeddings;
     }
@@ -495,18 +492,14 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     if (this.batch.enabled) {
       return this.batch.concurrency;
     }
-    const configured = this.settings.remote?.nonBatchConcurrency;
-    if (typeof configured === "number" && Number.isFinite(configured)) {
-      return Math.max(1, Math.floor(configured));
-    }
     const provider = this.syncProviderGeneration
       ? this.syncProviderGeneration.provider
       : this.provider;
-    return provider?.id === "ollama" ? 1 : EMBEDDING_INDEX_CONCURRENCY;
+    return provider?.id === "local" || provider?.id === "ollama" ? 1 : EMBEDDING_INDEX_CONCURRENCY;
   }
 
   private async writeChunks(
-    { entry, source, chunks, retained }: PreparedMemoryIndexEntry,
+    { entry, source, chunks, retained, removedIds }: PreparedMemoryIndexEntry,
     generation: MemorySyncProviderGeneration | null,
     embeddings: number[][],
     vectorReady: boolean,
@@ -520,7 +513,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
             sessionId: expectDefined(entry.sessionId, "memory index session identity"),
           }
         : undefined;
-    const retryInFull = await withMemoryWorkspaceLock(this.workspaceDir, async () => {
+    await withMemoryWorkspaceLock(this.workspaceDir, async () => {
       const assertCurrent = () => {
         this.memoryFiles?.assertCurrent();
         if (
@@ -547,7 +540,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
         model: generation?.provider?.model ?? "fts-only",
         now: Date.now(),
         vectorReady,
-        ...(session ? { source: "sessions", ...session, retained } : { source: "memory" }),
+        ...(session
+          ? { source: "sessions", ...session, retained, removedIds }
+          : { source: "memory" }),
       });
       const prepare = async (): Promise<boolean> => {
         if (source === "memory") {
@@ -569,15 +564,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
       };
       const published = await database.replaceSource(createReplacement(), assertCurrent, prepare);
       if (!published) {
-        return false;
-      }
-      if (generation && database === generation.database) {
-        if (published.beforeRevision !== generation.databaseRevision) {
-          generation.cacheWritesInvalidated = true;
-        }
-        // Admission can resume another writer before this continuation runs.
-        // Adopt only the revision captured by our committed publication.
-        generation.databaseRevision = published.databaseRevision;
+        return;
       }
       this.database.vectorDegradedWriteWarningShown = logMemoryVectorDegradedWrite({
         vectorEnabled: this.vector.enabled,
@@ -587,15 +574,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
         loadError: this.vector.loadError,
         warn: (message) => log.warn(message),
       });
-      return published.retainedDrift;
     }).catch((error: unknown) => {
       this.markFailedFullReindexRetry({ memory: false, sessions: Boolean(session) });
       throw error;
     });
-    // A drifted delta wrote nothing; rebuild once after releasing the workspace lock.
-    if (retryInFull) {
-      await this.indexFileWithGeneration(entry, source, generation, false);
-    }
   }
 
   private async prepareIndexEntry(
