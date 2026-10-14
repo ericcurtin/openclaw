@@ -26,6 +26,7 @@ import {
 } from "./sqlite-error-diagnostics.js";
 import {
   discardSqliteTransactionState,
+  prepareSqliteTransactionCommit,
   withSqlitePostCommitPublications,
 } from "./sqlite-post-commit.js";
 import {
@@ -46,7 +47,11 @@ type TransactionDatabase = DatabaseSync & {
   [abortedTransactionSymbol]?: { error: unknown };
 };
 
-export function assertTransactionUsable(db: TransactionDatabase): void {
+export function assertTransactionUsable(db: TransactionDatabase | PostgresSqlConnection): void {
+  if (isPostgresSqlConnection(db)) {
+    assertPostgresTransactionUsable(db);
+    return;
+  }
   const aborted = db[abortedTransactionSymbol];
   if (aborted) {
     throw aborted.error;
@@ -375,7 +380,7 @@ function abortImmediateTransaction(
   // the commit owner runs, no transaction may instead mean a durable COMMIT
   // followed by a guard failure or rejected Promise: retain conservative fencing.
   if (!commitStarted && db.isOpen && !db.isTransaction) {
-    discardSqliteTransactionState(db, error);
+    discardSqliteTransactionState(db, error, "rolled-back");
     return;
   }
   try {
@@ -427,6 +432,9 @@ function runSqliteTransactionSync<T>(
     sql: mode === "immediate" ? "BEGIN IMMEDIATE" : "BEGIN",
     step: "begin",
   });
+  if (timing) {
+    timing.transactions.count += 1;
+  }
   return settleSqliteTransactionSync(db, operation, mode, beginMs, prepareMs, options);
 }
 
@@ -462,6 +470,7 @@ function settleSqliteTransactionSync<T>(
   const commit = () => {
     const startedAt = Date.now();
     try {
+      prepareSqliteTransactionCommit(db);
       execTimedTransactionStep({ db, options, sql: "COMMIT", step: "commit" });
     } finally {
       commitMs += Date.now() - startedAt;

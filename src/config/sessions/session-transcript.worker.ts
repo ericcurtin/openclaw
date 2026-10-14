@@ -148,12 +148,15 @@ serveOwnedWorkerTasks(
         };
       }
       if (request.kind === "prewarm") {
-        await Promise.all([
-          import("../../gateway/session-history-worker-reader.js"),
-          import("../../gateway/server-methods/chat-history-page-kernel.js"),
-          import("../../gateway/server-methods/chat-history-response-page.js"),
-          import("../../gateway/session-history-snapshot.js"),
-        ]);
+        // Maintenance needs database admission, not a second resident chat presentation graph.
+        if (request.history) {
+          await Promise.all([
+            import("../../gateway/session-history-worker-reader.js"),
+            import("../../gateway/server-methods/chat-history-page-kernel.js"),
+            import("../../gateway/server-methods/chat-history-response-page.js"),
+            import("../../gateway/session-history-snapshot.js"),
+          ]);
+        }
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");
         const opened = withOpenClawAgentDatabaseReadOnly(() => undefined, {
@@ -355,14 +358,6 @@ serveOwnedWorkerTasks(
         const { readSessionEntryCurrentFacts } =
           await import("./session-entry-current-admission.worker.js");
         return readSessionEntryCurrentFacts(request);
-      }
-      if (request.kind === "session-row-backfill") {
-        const { readSessionRowTranscriptFields } =
-          await import("../../gateway/session-row-transcript-backfill.worker.js");
-        return {
-          kind: "session-row-backfill" as const,
-          fields: readSessionRowTranscriptFields(request.params),
-        };
       }
       if (request.kind === "session-target-inventory") {
         const { readSessionStoreTargetInventory } =
@@ -593,12 +588,16 @@ serveOwnedWorkerTasks(
           loadSessionEntryReadOnlyInScope({ ...request.scope, projection: "list" }) !== undefined
         );
       }
+      if (request.kind === "session-entries") {
+        const { prepareSessionMemoryEntries } = await import("./session-memory-entry.worker.js");
+        return { entries: await prepareSessionMemoryEntries(request.entries) };
+      }
       return await runWithSessionTranscriptReadFence(
         request.admission,
         async (): Promise<SessionTranscriptWorkerValues[keyof SessionTranscriptWorkerValues]> => {
           if (request.kind === "session-activity-summary-source") {
             const { readActivitySummaryBatch } =
-              await import("../../gateway/session-activity-summary-source.js");
+              await import("../../gateway/session-activity-summary-source.worker.js");
             return {
               kind: "session-activity-summary-source" as const,
               source: readActivitySummaryBatch(request),
@@ -633,15 +632,8 @@ serveOwnedWorkerTasks(
               await import("./session-transcript-hydration-read.worker.js");
             return readSessionEntrySnapshotRequest(request);
           }
-          const { buildSessionEntryInProcess, readSessionEntryResetRecallCutoff } =
-            await import("../../../packages/memory-host-sdk/src/host/session-files.js");
-          const entry = await buildSessionEntryInProcess(request.absPath, request.options);
-          return {
-            entry,
-            resetRecallCutoff: entry
-              ? readSessionEntryResetRecallCutoff(entry)
-              : { state: "absent" },
-          };
+          const { prepareSessionMemoryEntry } = await import("./session-memory-entry.worker.js");
+          return prepareSessionMemoryEntry(request);
         },
       );
     };

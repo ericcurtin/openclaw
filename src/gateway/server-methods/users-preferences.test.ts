@@ -3,6 +3,7 @@ import { GatewayErrorDetailCodes } from "../../../packages/gateway-protocol/src/
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { withGatewayPersonalToolUser } from "../../agents/tools/gateway-caller-context.js";
 import { withPersonalToolTurn } from "../../auto-reply/reply/personal-tool-turn.test-support.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -14,6 +15,7 @@ import * as preferences from "../../state/user-preferences.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { linkEmail, setAvatar } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import {
@@ -226,8 +228,10 @@ test.each(["current", "scope", "source", "identity", "error-response", "staff"] 
       layout: "state-only",
       prefix: "users-self-read-",
     });
+    setRuntimeConfigSnapshot({});
     let releaseProfiles: (() => void) | undefined;
     try {
+      setRuntimeConfigSnapshot({});
       const owner = ensureProfileForEmail("self-reader@example.test");
       const replacement = ensureProfileForEmail("other-reader@example.test");
       releaseProfiles = (await prepareUserProfileCatalog()).release;
@@ -326,8 +330,10 @@ test("users.prefs.get retains its original scope across the preference read", as
     layout: "state-only",
     prefix: "users-prefs-read-",
   });
+  setRuntimeConfigSnapshot({});
   let releaseProfiles: (() => void) | undefined;
   try {
+    setRuntimeConfigSnapshot({});
     const owner = ensureProfileForEmail("retained-preferences@example.test");
     releaseProfiles = (await prepareUserProfileCatalog()).release;
     await invokePreferenceMethod("users.prefs.set", { entries: { "ui.theme": "dark" } }, owner.id);
@@ -499,7 +505,7 @@ test("users.prefs.set notifies only the current merged profile without main-thre
 
     // Measure recipient selection on this handle; the preference worker has its own connection.
     const reads = trackSqliteStatementExecutions(
-      openOpenClawStateDatabase().db,
+      requireNativeSqliteDatabase(openOpenClawStateDatabase().db),
       ["profiles"],
       (sql) =>
         /^select\b/i.test(sql) && /\bfrom "user_profiles"(?:\s|$)/i.test(sql) ? "profiles" : null,
