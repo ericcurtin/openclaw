@@ -27,6 +27,7 @@ import {
   formatAcpInheritedToolAllowError,
   formatAcpInheritedToolDenyError,
 } from "../inherited-tool-deny.js";
+import { createCachedToolSchema } from "../schema/cached-schema.js";
 import { optionalStringEnum, requesterProfileSchema } from "../schema/typebox.js";
 import { resolveSenderRestrictedSpawnError } from "../spawn-requester-policy.js";
 import { withParentExecutionIdentity } from "../subagents/spawn/execution-identity-spawn-context.js";
@@ -147,7 +148,13 @@ function resolveSessionsSpawnThreadAvailability(opts?: {
   };
 }
 
-function createSessionsSpawnToolSchema(params: {
+const createSessionsSpawnToolSchema = createCachedToolSchema({
+  build: buildSessionsSpawnToolSchema,
+  key: (params) =>
+    `${params.acpAvailable}:${params.threadAvailable}:${params.subagentThreadAvailable}:${params.swarmEnabled}`,
+});
+
+function buildSessionsSpawnToolSchema(params: {
   acpAvailable: boolean;
   threadAvailable: boolean;
   subagentThreadAvailable: boolean;
@@ -344,12 +351,14 @@ export function createSessionsSpawnTool(
     collectDefaultAgentId: swarmConfig.enabled ? swarmConfig.defaultAgentId : undefined,
     spawnContext: opts,
   });
-  const parameters = createSessionsSpawnToolSchema({
-    acpAvailable,
-    threadAvailable,
-    subagentThreadAvailable: threadAvailability.subagent,
-    swarmEnabled: swarmConfig.enabled,
-  });
+  const parameters = opts?.workerPlacement
+    ? PlacedSessionsSpawnSchema
+    : createSessionsSpawnToolSchema({
+        acpAvailable,
+        threadAvailable,
+        subagentThreadAvailable: threadAvailability.subagent,
+        swarmEnabled: swarmConfig.enabled,
+      });
   const tool: AnyAgentTool = {
     label: "Sessions",
     name: "sessions_spawn",
@@ -367,7 +376,7 @@ export function createSessionsSpawnTool(
           spawnRestricted: restrictToSpawned,
           agentIdGuidance,
         }),
-    parameters: opts?.workerPlacement ? PlacedSessionsSpawnSchema : parameters,
+    parameters,
     execute: wrapGatewayPersonalToolExecution(async (_toolCallId, args, signal) =>
       withToolEffectBoundary(async (onSpawnEffectsStart) => {
         const operatorSelection = resolveGatewayToolOperatorSelection();
