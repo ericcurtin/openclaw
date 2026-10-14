@@ -29,7 +29,7 @@ import type {
 } from "./session-pending-input-operations.types.js";
 import type { SessionPendingInputWorkerReceipt } from "./session-pending-input.types.js";
 import type { SessionSourcePredicate } from "./session-source-authority.js";
-import type { SessionTranscriptAuthorityReceipt } from "./session-transcript-authority.js";
+import type { SessionTranscriptAuthorityReceipt } from "./session-transcript-authority.types.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import type {
   SessionTranscriptTurnExpectedState,
@@ -301,14 +301,17 @@ export type SessionActorCommitObserver<Value> = {
   committed(outcome: Extract<SessionActorOutcome<Value>, { kind: "committed" }>): void;
 };
 
-/** Storage-independent commands and receipts; database handles stay inside each backend. */
+/** Private durable worker commands; the actor reconstructs outcomes from native receipts. */
 export type SessionActorOperations = {
   [Phase in SessionActorPhase as `session.actor.${Phase}`]: {
     input: SessionActorCommandContext &
       SessionActorPhaseInputs[Phase] & {
         target: SessionActorTarget;
       };
-    output: SessionActorOutcome<SessionActorPhaseResults[Phase]>;
+    /** Native settlement owns committed data; the reply only acknowledges it. */
+    output:
+      | Exclude<SessionActorOutcome<never>, { kind: "committed" }>
+      | Pick<Extract<SessionActorOutcome<never>, { kind: "committed" }>, "kind" | "failure">;
   };
 } & {
   "session.actor.read": {
@@ -326,7 +329,8 @@ type SessionActorCommands = {
 };
 
 type SessionActorStorageCommitObserver<Value> = {
-  committed(outcome: Extract<SessionActorStorageOutcome<Value>, { kind: "committed" }>): void;
+  beforeCommit?(outcome: Extract<SessionActorStorageOutcome<Value>, { kind: "committed" }>): void;
+  committed?(outcome: Extract<SessionActorStorageOutcome<Value>, { kind: "committed" }>): void;
 };
 
 /** Bound at acquisition; shares the actor's accepted work, FIFO, and state owner. */
