@@ -1,5 +1,9 @@
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
-import { readPositiveIntegerParam } from "openclaw/plugin-sdk/channel-actions";
+import {
+  readPositiveIntegerParam,
+  resolveReactionMessageId,
+} from "openclaw/plugin-sdk/channel-actions";
+import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
   createAccountStatusSink,
@@ -45,7 +49,6 @@ import {
 import {
   extractMSTeamsToolSendResult,
   msteamsContextTargetsMatch,
-  resolveMSTeamsActionMessage,
   resolveMSTeamsAutoThreadId,
 } from "./action-threading.js";
 import {
@@ -155,6 +158,39 @@ function resolveGraphActionTarget(
     return currentGraphTarget;
   }
   return currentChatType === "channel" ? "" : (currentChannelTarget ?? "");
+}
+
+function resolveMSTeamsActionMessage(
+  ctx: Pick<ChannelMessageActionContext, "params" | "toolContext">,
+  to: string,
+  allowCurrentMessageIdFallback = false,
+): { messageId: string; threadRootId?: string } {
+  const canUseCurrentMessageId =
+    allowCurrentMessageIdFallback &&
+    msteamsContextTargetsMatch(to, {
+      currentChannelId: ctx.toolContext?.currentChannelId ?? undefined,
+      currentMessagingTarget:
+        normalizeOptionalString(ctx.toolContext?.currentGraphChannelId) ??
+        normalizeOptionalString(ctx.toolContext?.currentMessagingTarget),
+    });
+  const resolved = canUseCurrentMessageId
+    ? resolveReactionMessageId({
+        args: ctx.params,
+        toolContext: { currentMessageId: ctx.toolContext?.currentMessageId ?? undefined },
+      })
+    : (normalizeOptionalString(ctx.params.messageId) ?? "");
+  const messageId = resolved == null ? "" : String(resolved).trim();
+  // Graph addresses a channel reply only beneath its thread root. Carry the root for
+  // the current message; never infer one for another explicit message id.
+  const currentMessageId = ctx.toolContext?.currentMessageId;
+  const threadRootId =
+    canUseCurrentMessageId &&
+    ctx.toolContext?.currentChatType === "channel" &&
+    currentMessageId != null &&
+    messageId === String(currentMessageId).trim()
+      ? normalizeOptionalString(ctx.toolContext.currentThreadTs)
+      : undefined;
+  return { messageId, ...(threadRootId ? { threadRootId } : {}) };
 }
 
 const msteamsChannelOutbound: ChannelOutboundAdapter = {
