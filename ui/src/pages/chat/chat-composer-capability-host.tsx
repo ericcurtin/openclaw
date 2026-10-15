@@ -7,10 +7,7 @@ import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import type { McpServerForm } from "../../components/mcp-server-form.ts";
 import "../../components/modal-dialog.ts";
 import { registerMcpEnglish } from "../../i18n/locales/en-mcp.ts";
-import {
-  buildToolsEffectiveRequestKey,
-  loadToolsEffective,
-} from "../../lib/agents/tools-effective.ts";
+import { buildToolsEffectiveRequestKey } from "../../lib/agents/tools-effective.ts";
 import { currentDisplayRuntimeConfig } from "../../lib/config/config-state-model.ts";
 import {
   buildAddMcpServerPatch,
@@ -82,7 +79,7 @@ export class ChatComposerCapabilityHost {
     context: ApplicationContext,
     state: ChatPageHost,
     agentId: string,
-  ): { cacheKey: string; requestKey: string } {
+  ): string {
     const requestKey = buildToolsEffectiveRequestKey(
       {
         chatModelCatalog: state.chatModelCatalog,
@@ -95,7 +92,7 @@ export class ChatComposerCapabilityHost {
       context.runtimeConfig.state.configSnapshot ?? null,
       currentDisplayRuntimeConfig(context.runtimeConfig.state),
     );
-    return { cacheKey: `${requestKey}\0config=${configFingerprint}`, requestKey };
+    return `${requestKey}\0config=${configFingerprint}`;
   }
 
   private loadEffectiveTools(
@@ -106,11 +103,13 @@ export class ChatComposerCapabilityHost {
   ): void {
     const client = state.client;
     const sessionKey = state.sessionKey;
-    const { cacheKey, requestKey } = this.effectiveToolsKeys(context, state, agentId);
+    const cacheKey = this.effectiveToolsKeys(context, state, agentId);
     // The key does not change when a run discovers MCP tools, so an explicit open refetches.
     if (
       !state.connected ||
       !client ||
+      !agentId.trim() ||
+      !sessionKey.trim() ||
       this.effectiveToolsRequest?.key === cacheKey ||
       (!refresh &&
         (this.effectiveTools?.key === cacheKey || this.effectiveToolsErrorKey === cacheKey))
@@ -120,18 +119,6 @@ export class ChatComposerCapabilityHost {
     const request = { key: cacheKey };
     const connectionEpoch = state.connectionEpoch;
     this.effectiveToolsRequest = request;
-    const loader: Parameters<typeof loadToolsEffective>[0] = {
-      chatModelCatalog: state.chatModelCatalog,
-      client,
-      connected: true,
-      sessions: context.sessions,
-      sessionsResult: state.sessionsResult,
-      toolsEffectiveError: null,
-      toolsEffectiveLoading: false,
-      toolsEffectiveLoadingKey: null,
-      toolsEffectiveResult: null,
-      toolsEffectiveResultKey: null,
-    };
     const isCurrent = () =>
       this.effectiveToolsRequest === request &&
       this.client === client &&
@@ -140,18 +127,17 @@ export class ChatComposerCapabilityHost {
       this.connectionEpoch === connectionEpoch &&
       state.connectionEpoch === connectionEpoch &&
       state.sessionKey === sessionKey &&
-      this.effectiveToolsKeys(context, state, agentId).cacheKey === cacheKey;
+      this.effectiveToolsKeys(context, state, agentId) === cacheKey;
     this.effectiveToolsErrorKey = null;
     this.notify();
-    void loadToolsEffective(loader, { agentId, sessionKey })
-      .then(() => {
-        if (!isCurrent()) {
-          return;
-        }
-        if (loader.toolsEffectiveResult && loader.toolsEffectiveResultKey === requestKey) {
-          this.effectiveTools = { key: cacheKey, result: loader.toolsEffectiveResult };
-        } else if (loader.toolsEffectiveError) {
-          this.effectiveToolsErrorKey = cacheKey;
+    void client
+      .request<ToolsEffectiveResult>("tools.effective", {
+        agentId: agentId.trim(),
+        sessionKey: sessionKey.trim(),
+      })
+      .then((result) => {
+        if (isCurrent()) {
+          this.effectiveTools = { key: cacheKey, result };
         }
       })
       .catch(() => {
@@ -470,7 +456,7 @@ export class ChatComposerCapabilityHost {
       this.loadEffectiveTools(context, state, agentId);
     }
     const effectiveToolsKey = effectiveToolsAvailable
-      ? this.effectiveToolsKeys(context, state, agentId).cacheKey
+      ? this.effectiveToolsKeys(context, state, agentId)
       : null;
     const toolsEffectiveResult =
       effectiveToolsKey !== null && this.effectiveTools?.key === effectiveToolsKey
