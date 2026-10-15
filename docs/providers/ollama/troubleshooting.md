@@ -241,8 +241,7 @@ sidebarTitle: "Troubleshooting"
 
   <Accordion title="Ollama still aborts or hangs on this host">
     If `curl` to Ollama works but agent turns abort, try [llmman](/providers/llmman)
-    as the local server. On a fresh install, `llmman launch openclaw --model qwen3.8`
-    onboards OpenClaw against it.
+    as the local server.
 
   </Accordion>
 </AccordionGroup>
