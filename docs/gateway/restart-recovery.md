@@ -16,8 +16,11 @@ missing durable message-action authority claim, may tombstone one session
 until you inspect or replace it.
 
 Inter-session steering updates remain context for the executing turn. When that
-turn retains a human Control UI or channel source claim, recovery uses the claim
-rather than treating the latest steering message as a new delegated request.
+turn retains a Control UI, channel, or authenticated operator source claim,
+recovery uses the claim rather than treating the latest steering message as a new
+delegated request. This includes authenticated non-browser clients whose ingress
+is labeled internal. Before execution, the Gateway restores the exact operator
+source under current identity and access policy; a revoked source cannot resume.
 The existing source-authorization and delivery checks still apply; a transcript
 message alone cannot restore missing sender authority.
 
@@ -34,6 +37,11 @@ and what the automatic resume looks like.
 During startup, a new reply waits for its agent's model and plugin runtime to
 finish loading. Agents that are already ready can serve replies while other
 agents continue loading. Startup preparation failures still report an error.
+
+After the HTTP listener binds, interrupted main-session marking overlaps session
+projection preparation. Both settle before channels start and the Gateway reports
+ready. Post-ready recovery reuses the completed store checks instead of repeating
+that scan.
 
 ## What survives a restart
 
@@ -1090,8 +1098,8 @@ existing restart delivery and continuation behavior.
   boots. Recovery preserves channels that an operator manually stopped and any
   separate development-mode suppression. Gateway logs look like:
   `channel autostart suppressed by crash-loop breaker; refusing automatic
-start for <channel>… Start a channel manually with: openclaw gateway call
-channels.start --params '{"channel":"<id>"}'`
+  start for <channel>… Start a channel manually with: openclaw gateway call
+  channels.start --params '{"channel":"<id>"}'`
 
   Safe mode also pauses main-session restart recovery. Interrupted entries and
   transcripts stay unchanged: the pause does not charge an attempt, settle a

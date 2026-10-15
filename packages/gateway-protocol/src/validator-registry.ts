@@ -157,6 +157,7 @@ export const validateAgentIdentityParams = compile(S.AgentIdentityParamsSchema);
 export const validateAgentWaitParams = compile(S.AgentWaitParamsSchema);
 export const validateWakeParams = compile(S.WakeParamsSchema);
 export const validateAgentsListParams = compile(S.AgentsListParamsSchema);
+export const validateProjectsCheckoutOptionsParams = compile(S.ProjectsCheckoutOptionsParamsSchema);
 export const validateProjectsListParams = compile(S.ProjectsListParamsSchema);
 export const validateProjectsRegisterParams = compile(S.ProjectsRegisterParamsSchema);
 export const validateProjectsAddParams = compile(S.ProjectsAddParamsSchema);
@@ -413,6 +414,9 @@ export const validateSystemAgentSetupActivateStartParams = compile(
 export const validateSystemAgentSetupAuthStartParams = compile(
   S.SystemAgentSetupAuthStartParamsSchema,
 );
+export const validateSystemAgentSetupRuntimeStartParams = compile(
+  S.SystemAgentSetupRuntimeStartParamsSchema,
+);
 export const validateWizardStartParams = compile(S.WizardStartParamsSchema);
 export const validateMcpAuthLoginParams = compile(S.McpAuthLoginParamsSchema);
 export const validateWizardNextParams = compile(S.WizardNextParamsSchema);
@@ -581,6 +585,7 @@ export const validateChatStartupParams = compile(S.ChatStartupParamsSchema);
 export const validateChatMetadataParams = compile(S.ChatMetadataParamsSchema);
 export const validateChatMessageGetParams = compile(S.ChatMessageGetParamsSchema);
 export const validateChatToolTitlesParams = compile(S.ChatToolTitlesParamsSchema);
+export const validateChatPredictParams = compile(S.ChatPredictParamsSchema);
 export const validateChatSendParams = compile(S.ChatSendParamsSchema);
 export const validateChatAbortParams = compile(S.ChatAbortParamsSchema);
 export const validateChatInjectParams = compile(S.ChatInjectParamsSchema);
