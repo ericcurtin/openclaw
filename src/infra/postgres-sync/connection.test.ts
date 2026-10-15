@@ -2,6 +2,7 @@ import { channel } from "node:diagnostics_channel";
 import { DatabaseSync } from "node:sqlite";
 import { MessageChannel, receiveMessageOnPort, threadId } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withEngineStoreAdmission } from "../database-engine/admission-scope.js";
 import { readSqliteDatabaseScopedWriteToken } from "../sqlite-database-admission.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../sqlite-worker-contract.js";
 import { PostgresSyncConnection } from "./connection.js";
@@ -112,6 +113,28 @@ function transportFixture(
 }
 
 describe("PostgreSQL bridge request correlation", () => {
+  it("reports an invalid DSN promptly with connection repair guidance", () => {
+    const anchor = new DatabaseSync(":memory:");
+    const started = performance.now();
+    try {
+      expect(() =>
+        withEngineStoreAdmission(
+          () => new PostgresSyncConnection("postgresql://[invalid", "unused", anchor, "unused"),
+        ),
+      ).toThrowError(
+        expect.objectContaining({
+          name: "PostgresConnectionError",
+          message: expect.stringContaining(
+            "Check database.postgres.connection, network, and credentials",
+          ),
+        }),
+      );
+      expect(performance.now() - started).toBeLessThan(10_000);
+    } finally {
+      anchor.close();
+    }
+  });
+
   it.each(["COMMIT", "ROLLBACK"])(
     "changes the anchor token for COMMIT, retaining it for ROLLBACK (%s)",
     (command) => {
@@ -134,21 +157,24 @@ describe("PostgreSQL bridge request correlation", () => {
     expect(readSqliteDatabaseScopedWriteToken(fixture.db.anchor, "entry")).toBe(before);
   });
 
-  it("rejects opening a workload connection on the main thread before starting its bridge", () => {
-    expect(threadId).toBe(0);
-    const anchor = new DatabaseSync(":memory:");
-    try {
-      expect(
-        () =>
-          new PostgresSyncConnection("postgres:///unused", "unused", anchor, "unused", {
-            lockTimeoutMs: 60_000,
-            statementTimeoutMs: 90_000,
-          }),
-      ).toThrow("only admission and migrations may open on the main thread");
-    } finally {
-      anchor.close();
-    }
-  });
+  it.skipIf(threadId !== 0)(
+    "rejects opening a workload connection on the main thread before starting its bridge",
+    () => {
+      expect(threadId).toBe(0);
+      const anchor = new DatabaseSync(":memory:");
+      try {
+        expect(
+          () =>
+            new PostgresSyncConnection("postgres:///unused", "unused", anchor, "unused", {
+              lockTimeoutMs: 60_000,
+              statementTimeoutMs: 90_000,
+            }),
+        ).toThrow("only synchronous admission and migrations may run on the main thread");
+      } finally {
+        anchor.close();
+      }
+    },
+  );
 
   it("publishes executed PostgreSQL statements without literal or binding values", () => {
     const { db } = transportFixture("normal");

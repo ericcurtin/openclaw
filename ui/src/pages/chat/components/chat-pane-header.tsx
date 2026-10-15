@@ -1,4 +1,4 @@
-import { Show } from "solid-js";
+import { createSignal, Show } from "solid-js";
 import { buildControlUiResourcePath } from "../../../../../src/gateway/control-ui-resource-routes.js";
 import { isIncognitoSessionKey } from "../../../../../src/shared/incognito-session-key.js";
 import type { GatewaySessionRow, SessionBranch } from "../../../api/types.ts";
@@ -9,24 +9,25 @@ import {
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
   type ShellNavDrawerToggleDetail,
 } from "../../../components/command-palette-contract.ts";
+import { StandalonePersonLink } from "../../../components/person-activity-link-solid.tsx";
 import {
   personActivityLink,
-  renderStandalonePersonLink,
   type PersonActivityRouting,
 } from "../../../components/person-activity-link.ts";
 import { renderSessionColorDot } from "../../../components/session-color.ts";
-import { renderSessionOwnerChip } from "../../../components/session-owner-chip.ts";
 import { isCloudWorkerPlacementState } from "../../../components/session-row-badges.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { renderSessionOwnerChip } from "../../../components/solid/session-presentation.tsx";
 import "../../../components/tooltip.ts";
 import "../../../components/workspace-icon.ts";
+import { SessionTitlePlaceholder } from "../../../components/solid/session-title-placeholder.tsx";
 import {
   clearCompositionEnd,
   isComposingKeyboardEvent,
   recordCompositionEnd,
 } from "../../../lib/ime.ts";
 import { i18nRevision, t } from "../../../lib/reactive/i18n.ts";
-import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
+import { isSessionTitlePending, resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import {
   areUiSessionKeysEquivalent,
   resolveUiSessionNavigationParentKey,
@@ -34,6 +35,7 @@ import {
 import { nativeListener } from "../../../lib/solid-native-listener.ts";
 import { presentedContent, type PresentationValue } from "../../../lit/presentation-binding.ts";
 import { LitContent, solidContent, emptyLegacyContent } from "../../../lit/solid-content.tsx";
+import { PaneDetails, type PaneDetailsProps } from "../chat-pane-header-view.tsx";
 import { ChatPaneLayoutMenu, type ChatPaneLayoutMenuProps } from "./chat-header-panel-actions.tsx";
 import { ChatPaneVersionsMenu } from "./chat-pane-versions-menu.tsx";
 
@@ -49,6 +51,7 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   mergedChrome: boolean;
   navDrawerOpen?: boolean;
   title: string;
+  titlePending?: boolean;
   session: GatewaySessionRow | undefined;
   incognito?: boolean;
   showOwnerChip?: boolean;
@@ -76,7 +79,7 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   copiedAction: ChatPaneHeaderAction | null;
   renameDisabledReason?: string;
   runningSubagentCount?: number;
-  detailsControl?: unknown;
+  detailsControl?: PaneDetailsProps;
   runAction?: unknown;
   presence?: unknown;
   sharingControl?: unknown;
@@ -163,7 +166,17 @@ function SessionTitle(props: ChatPaneHeaderProps) {
           renderSessionColorDot(props.catalog ? props.catalogColor : props.session?.color))
         }
       />
-      <span class="chat-pane__session-title-text">{props.title}</span>
+      <span class="chat-pane__session-title-text">
+        <Show
+          when={
+            props.titlePending ??
+            (!props.catalog && isSessionTitlePending(props.session?.key ?? "", props.session))
+          }
+          fallback={props.title}
+        >
+          <SessionTitlePlaceholder />
+        </Show>
+      </span>
     </>
   );
 }
@@ -181,7 +194,7 @@ function SessionCrumb(props: ChatPaneHeaderProps) {
               type="button"
               title={t("chat.sessionHeader.renameTooltip")}
               aria-label={t("chat.sessionHeader.renameAria", { title: props.title })}
-              onClick={props.onBeginRename}
+              onClick={() => props.onBeginRename()}
             >
               <SessionTitle {...props} />
             </button>
@@ -223,6 +236,7 @@ function SessionCrumb(props: ChatPaneHeaderProps) {
 }
 
 function ProjectCrumb(props: ChatPaneHeaderProps) {
+  const [opened, setOpened] = createSignal(false);
   const copied = () => props.copiedAction === "copy-path" || props.copiedAction === "copy-branch";
   return (
     <wa-dropdown
@@ -234,7 +248,10 @@ function ProjectCrumb(props: ChatPaneHeaderProps) {
           props.onMenuAction(value);
         }
       }}
-      onWa-show={() => props.onMenuOpenChange(true)}
+      onWa-show={() => {
+        setOpened(true);
+        props.onMenuOpenChange(true);
+      }}
       onWa-hide={() => props.onMenuOpenChange(false)}
     >
       <button
@@ -266,26 +283,28 @@ function ProjectCrumb(props: ChatPaneHeaderProps) {
         </Show>
         <span>{copied() ? t("chat.sessionHeader.copied") : props.workspaceLabel}</span>
       </button>
-      <Show when={props.canReveal && props.workspaceRoot}>
-        <wa-dropdown-item value="reveal">{revealLabel(props.platform)}</wa-dropdown-item>
-      </Show>
-      <Show when={props.workspaceRoot}>
-        <wa-dropdown-item value="copy-path">
-          {t(
-            props.copiedAction === "copy-path"
-              ? "chat.sessionHeader.copied"
-              : "chat.sessionHeader.copyPath",
-          )}
-        </wa-dropdown-item>
-      </Show>
-      <Show when={props.branch}>
-        <wa-dropdown-item value="copy-branch">
-          {t(
-            props.copiedAction === "copy-branch"
-              ? "chat.sessionHeader.copied"
-              : "chat.sessionHeader.copyBranch",
-          )}
-        </wa-dropdown-item>
+      <Show when={opened()}>
+        <Show when={props.canReveal && props.workspaceRoot}>
+          <wa-dropdown-item value="reveal">{revealLabel(props.platform)}</wa-dropdown-item>
+        </Show>
+        <Show when={props.workspaceRoot}>
+          <wa-dropdown-item value="copy-path">
+            {t(
+              props.copiedAction === "copy-path"
+                ? "chat.sessionHeader.copied"
+                : "chat.sessionHeader.copyPath",
+            )}
+          </wa-dropdown-item>
+        </Show>
+        <Show when={props.branch}>
+          <wa-dropdown-item value="copy-branch">
+            {t(
+              props.copiedAction === "copy-branch"
+                ? "chat.sessionHeader.copied"
+                : "chat.sessionHeader.copyBranch",
+            )}
+          </wa-dropdown-item>
+        </Show>
       </Show>
     </wa-dropdown>
   );
@@ -319,6 +338,7 @@ function ChatPaneHeader(props: ChatPaneHeaderProps) {
         class={[
           "chat-pane__header",
           {
+            "chat-pane__header--mobile": props.mergedChrome,
             "chat-pane__header--closable": props.onClosePane !== undefined,
             "chat-pane__header--stacked-status":
               props.narrow && (props.runningSubagentCount ?? 0) > 0,
@@ -366,15 +386,9 @@ function ChatPaneHeader(props: ChatPaneHeaderProps) {
             </openclaw-tooltip>
           </Show>
           <IdentityCrumbs {...props} /> <LitContent value={props.publicAccessIndicator} />
-          {hasSharingControl() ? undefined : (
-            <LitContent
-              value={renderStandalonePersonLink(
-                renderSessionOwnerChip(
-                  props.showOwnerChip ? props.session?.owner?.actor : undefined,
-                  "header",
-                  props.session?.owner?.assignedAt !== undefined ? "owned" : "created",
-                  props.ownerViewing,
-                ),
+          {props.mergedChrome || hasSharingControl() ? undefined : (
+            <StandalonePersonLink
+              link={
                 props.showOwnerChip
                   ? personActivityLink(
                       props.session?.owner?.actor.identity?.type === "profile"
@@ -383,24 +397,35 @@ function ChatPaneHeader(props: ChatPaneHeaderProps) {
                       props.personActivity,
                       props.session?.owner?.actor.label,
                     )
-                  : null,
+                  : null
+              }
+            >
+              {renderSessionOwnerChip(
+                props.showOwnerChip ? props.session?.owner?.actor : undefined,
+                "header",
+                props.session?.owner?.assignedAt !== undefined ? "owned" : "created",
+                props.ownerViewing,
               )}
-            />
+            </StandalonePersonLink>
           )}
-          {props.showOwnerChip && props.session?.participants?.length ? (
+          {!props.mergedChrome && props.showOwnerChip && props.session?.participants?.length ? (
             <openclaw-viewer-facepile
               class="chat-pane__participants"
               prop:staticParticipants={props.session.participants}
               prop:totalCount={props.session.participantCount}
               prop:maxVisible={4}
               prop:personActivity={props.personActivity}
-              variant="session"
             />
           ) : undefined}
-          <LitContent value={props.placementControl} /> <LitContent value={props.presence} />
+          <LitContent value={props.placementControl} />
+          <Show when={!props.mergedChrome}>
+            <LitContent value={props.presence} />
+          </Show>
         </div>
         <div class="chat-pane__header-trailing">
-          <LitContent value={props.detailsControl} />
+          <Show when={props.detailsControl !== undefined}>
+            <PaneDetails {...props.detailsControl!} />
+          </Show>
           <LitContent
             value={presentedContent(
               props.presented,
@@ -420,8 +445,13 @@ function ChatPaneHeader(props: ChatPaneHeaderProps) {
             </Show>
             <LitContent value={props.runAction} />
             <LitContent value={props.sharingControl} />
-            <ChatPaneLayoutMenu {...props} />
-            <LitContent value={props.sessionMenuAction} />
+            <Show when={props.mergedChrome}>
+              <LitContent value={props.sessionMenuAction} />
+            </Show>
+            <ChatPaneLayoutMenu {...props} mobile={props.mergedChrome} />
+            <Show when={!props.mergedChrome}>
+              <LitContent value={props.sessionMenuAction} />
+            </Show>
           </div>
         </div>
         <Show when={props.narrow}>

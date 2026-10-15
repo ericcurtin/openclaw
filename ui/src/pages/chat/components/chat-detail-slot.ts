@@ -1,11 +1,11 @@
-import { html, type TemplateResult } from "lit";
+import { html } from "lit";
 import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
 import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-skeleton.ts";
 import { t } from "../../../i18n/index.ts";
 import { ensureLazySidebarElement } from "../chat-pane-sidebar-layout.ts";
 import type { ChatPageHost } from "../chat-state-host.ts";
 import { selectedChatSessionRow } from "../chat-state-route.ts";
-import type { ChatProps } from "../chat-view.ts";
+import type { ChatProps } from "../chat-view.tsx";
 import { openSlot } from "../sidebar-layout.ts";
 import "./chat-tool-output.ts";
 import { assistantMediaPolicyKey } from "./chat-message-media.ts";
@@ -18,7 +18,7 @@ export function renderChatDetailSlot(params: {
   content: SidebarContent;
   host: ChatPageHost;
   requestUpdate: () => void;
-}): TemplateResult {
+}) {
   const { content, host } = params;
   if (content.kind === "tool-output") {
     return html`<openclaw-chat-tool-output

@@ -17,6 +17,12 @@ import {
 import { SessionProviderReviewProjectionSchema } from "./sessions-provider-review.js";
 import { SessionSharingRoleSchema, SessionVisibilitySchema } from "./sessions-sharing-values.js";
 
+/** Existing directory on a paired session host; never a Gateway-owned checkout. */
+export const SessionDeviceFolderSchema = closedObject({
+  deviceId: NonEmptyString,
+  path: Type.String({ minLength: 1, maxLength: 4096 }),
+});
+
 export const SessionPermissionModeSchema = Type.Union([
   Type.Literal("read-only"),
   Type.Literal("guarded"),
@@ -137,6 +143,8 @@ export const SessionRowSchema = Type.Object(
     /** Shared dashboard default; absent means split. */
     boardPresentation: Type.Optional(Type.Union([Type.Literal("split"), Type.Literal("expanded")])),
     displayName: Type.Optional(Type.String()),
+    /** A title request is currently in flight; runtime-only, never persisted. */
+    titlePending: Type.Optional(Type.Boolean()),
     derivedTitle: Type.Optional(Type.String()),
     lastMessagePreview: Type.Optional(Type.String()),
     channel: Type.Optional(Type.String()),
@@ -197,6 +205,7 @@ export const SessionRowSchema = Type.Object(
     swarmGroupId: Type.Optional(Type.String()),
     /** Requester-owned execution counts; never child content or parent synthesis status. */
     swarm: Type.Optional(SessionSwarmSummarySchema),
+    deviceFolder: Type.Optional(SessionDeviceFolderSchema),
     worktree: Type.Optional(
       Type.Object({
         id: Type.String(),
@@ -266,6 +275,9 @@ export const SessionRowSchema = Type.Object(
     previousSessionId: Type.Optional(Type.String()),
     inputTokens: Type.Optional(Type.Number()),
     outputTokens: Type.Optional(Type.Number()),
+    usageReport: Type.Optional(
+      Type.Object({ state: Type.Union([Type.Literal("available"), Type.Literal("unavailable")]) }),
+    ),
     totalTokens: Type.Optional(Type.Number()),
     totalTokensFresh: Type.Optional(Type.Boolean()),
     contextTokens: Type.Optional(Type.Number()),

@@ -44,6 +44,8 @@ export async function resolveCompletionModelAuth(params: {
   /** Caller-loaded store; otherwise OpenAI route selection reads the agent store. */
   authStore?: AuthProfileStore;
   bindAuthOwner?: boolean;
+  /** Receives the auth store and every profile the prepared attempts may use. */
+  onAuthProfiles?: (store: AuthProfileStore, profileIds: string[]) => void;
   agentRuntimeId?: string;
   metadataSnapshot: PluginMetadataSnapshot;
   modelResolver: SimpleCompletionModelResolver;
@@ -53,7 +55,7 @@ export async function resolveCompletionModelAuth(params: {
   const { model: initialModel } = params;
   const authStore =
     params.authStore ??
-    (params.bindAuthOwner || initialModel.provider === "openai"
+    (params.onAuthProfiles || params.bindAuthOwner || initialModel.provider === "openai"
       ? await ensureAuthProfileStoreAsync(params.agentDir, {
           readOnly: true,
           allowKeychainPrompt: false,
@@ -75,7 +77,9 @@ export async function resolveCompletionModelAuth(params: {
     metadataSnapshot: params.metadataSnapshot,
     sessionAuthProfileId: params.profileId ?? params.preferredProfile,
     sessionAuthProfileSource: params.profileId ? "user" : "auto",
-    ...(params.bindAuthOwner && params.profileId ? { allowAuthProfileFallback: false } : {}),
+    ...((params.onAuthProfiles || params.bindAuthOwner) && params.profileId
+      ? { allowAuthProfileFallback: false }
+      : {}),
   } satisfies Parameters<typeof prepareAgentRuntimeAuth>[0];
   await reconcileAuthProfileQuotaBlocks(authParams);
   params.assertCurrent?.();
@@ -125,7 +129,7 @@ export async function resolveCompletionModelAuth(params: {
     env: process.env,
   });
   const preparedAuth =
-    routeResolution?.kind === "routes"
+    routeResolution?.kind === "routes" || params.onAuthProfiles
       ? prepareAgentRuntimeAuth({ ...authParams, routeIntent })
       : undefined;
   if (!preparedAuth || !authStore) {
@@ -196,5 +200,12 @@ export async function resolveCompletionModelAuth(params: {
       }),
     errorMessage: "Simple completion auth attempts could not be resolved.",
   });
+  params.onAuthProfiles?.(authStore, [
+    ...new Set(
+      preparedAuth.attempts.flatMap((attempt) =>
+        attempt.kind === "profile" ? [attempt.profileId] : [],
+      ),
+    ),
+  ]);
   return { auth: resolved.auth, model: resolved.model, routed: true, authStore };
 }

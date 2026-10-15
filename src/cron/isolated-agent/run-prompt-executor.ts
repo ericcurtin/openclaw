@@ -24,6 +24,7 @@ import {
   modelSupportsInput,
   prepareModelRunCapabilities,
 } from "../../agents/model-catalog-lookup.js";
+import { recordModelFallbackStop } from "../../agents/model-fallback-stop.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
 import {
   resolveScheduledToolCallerContext,
@@ -42,6 +43,7 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
+import { acquireCronInferenceAuthorization } from "../inference-binding.runtime.js";
 import { prepareCronRunAdmission } from "../run-admission.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { resolveCronAuthenticatedChannelRequester } from "../tools-allow-provenance.js";
@@ -87,6 +89,7 @@ export function createCronPromptExecutor(
     onPromptCompleted: (run: CronCompletedPromptRun) => void;
   },
 ) {
+  const trigger = params.trigger === "event" ? "event" : "cron";
   const cronFallbacksOverride =
     params.modelFallbacksOverride ??
     resolveCronFallbacksOverride({
@@ -163,6 +166,18 @@ export function createCronPromptExecutor(
   const resolveCandidateExecution = createCronCandidateExecutionResolver(params);
 
   return async (promptText: string, runStartedAt: number): Promise<CronCompletedPromptRun> => {
+    using inferenceLease = new DisposableStack();
+    const binding = params.job.inferenceBinding;
+    const inferenceAuthorization = binding
+      ? await acquireCronInferenceAuthorization({
+          binding,
+          cfg: params.cfgWithAgentDefaults,
+          agentDir: params.agentDir,
+        })
+      : undefined;
+    if (inferenceAuthorization) {
+      inferenceLease.defer(() => inferenceAuthorization.dispose());
+    }
     let canReusePreparedSession = preparedSessionAvailable;
     preparedSessionAvailable = false;
     // A retry can fail during preparation, before any backend start callback.
@@ -208,20 +223,23 @@ export function createCronPromptExecutor(
     // from session keys or run ids. Cleared when the run settles. A job whose
     // config cannot be canonicalized simply keeps standing grants inert; the
     // run itself must never fail for this diagnostic-side registration.
-    let unregisterCronRunExecSource = () => {};
+    using cronRunExecSource = new DisposableStack();
     try {
-      unregisterCronRunExecSource = registerCronRunExecSource(runId, {
-        agentId: params.agentId,
-        jobId: params.job.id,
-        jobConfigRevision: resolveCronJobConfigRevision(params.job),
-        jobName: params.job.name,
-        standingGrantAuthority: cronAdmission.standingGrantAuthority,
-      });
+      cronRunExecSource.defer(
+        registerCronRunExecSource(runId, {
+          agentId: params.agentId,
+          jobId: params.job.id,
+          jobConfigRevision: resolveCronJobConfigRevision(params.job),
+          jobName: params.job.name,
+          standingGrantAuthority: cronAdmission.standingGrantAuthority,
+        }),
+      );
     } catch {
       // Non-canonicalizable job config: no grant registration for this run.
     }
     const { modelResolve, currentChannelId } = await prepareCronModelResolveInput({
       ...params,
+      trigger,
       prompt: promptText,
       messageChannel,
     });
@@ -349,6 +367,12 @@ export function createCronPromptExecutor(
           catalog: thinkingCatalog,
           agentRuntime: candidateRuntime,
         });
+        if (binding && (providerOverride !== binding.provider || cliExecution)) {
+          throw new Error(
+            "Automation candidate is incompatible with its recorded inference account and route.",
+          );
+        }
+        inferenceAuthorization?.assertCurrent();
         assertCronRuntimeAuthorityCandidate({
           authority: params.job.runtimeAuthority,
           candidateRuntime,
@@ -379,7 +403,6 @@ export function createCronPromptExecutor(
             cliExecutionProvider: cliExecution ? executionProvider : undefined,
           });
         }
-        const bootstrapPromptWarningSignature = bootstrapPromptWarningSignaturesSeen.at(-1);
         // CLI providers can resume provider-native sessions; embedded providers
         // use OpenClaw's transcript/session file plus prompt-cache affinity.
         const fastModeState = resolveFastModeState({
@@ -399,7 +422,7 @@ export function createCronPromptExecutor(
             sessionKey: params.runSessionKey,
             sessionTarget,
             agentId: params.agentId,
-            trigger: "cron",
+            trigger,
             jobId: params.job.id,
             messageActionTurnCapability: cronAdmission.messageActionTurnCapability,
             config: params.cfgWithAgentDefaults,
@@ -407,6 +430,7 @@ export function createCronPromptExecutor(
             finalizePromptForResolvedTools,
             model: modelOverride,
             thinkLevel: candidateThinkLevel,
+            thinkingExplicit: candidateConfiguredThinkLevel !== undefined,
             timeoutMs: params.timeoutMs,
             runId,
             lane: resolveCronAgentLane(params.lane),
@@ -424,12 +448,13 @@ export function createCronPromptExecutor(
             bootstrapContextMode,
             bootstrapContextRunKind: "cron",
             bootstrapPromptWarningSignaturesSeen,
-            bootstrapPromptWarningSignature,
-            fastMode: fastModeState.mode,
+            bootstrapPromptWarningSignature: bootstrapPromptWarningSignaturesSeen.at(-1),
+            fastMode: fastModeState.requestMode,
             fastModeAutoOnSeconds: fastModeState.fastAutoOnSeconds,
             fastModeStartedAtMs,
             fastModeAutoProgressState,
             isFinalFallbackAttempt: runOptions.isFinalFallbackAttempt,
+            modelRoutingProvenance: runOptions.modelRoutingProvenance,
             contextEngineLogicalTurnLease: runOptions.contextEngineLogicalTurnLease,
             onContextEngineTurnCandidate: runOptions.onContextEngineTurnCandidate,
             userTurnTranscriptRecorder,
@@ -466,7 +491,7 @@ export function createCronPromptExecutor(
                   ? undefined
                   : await getCliSessionBinding(params.cronSession.sessionEntry, executionProvider);
                 const authProfileId = allowCliAuthProfileForwarding
-                  ? resolveCliExecutionAuthProfileId({
+                  ? await resolveCliExecutionAuthProfileId({
                       cliExecutionProvider: executionProvider,
                       authProfileProvider: providerOverride,
                       config: params.cfgWithAgentDefaults,
@@ -481,6 +506,14 @@ export function createCronPromptExecutor(
                         : undefined,
                     })
                   : undefined;
+                if (trigger === "cron" && !binding && authProfileId) {
+                  const refusal = new Error(
+                    "Automation has no recorded inference account. Explicitly select its account with a model@profile update before running it.",
+                  );
+                  // Another model would only bypass the operator's account choice.
+                  recordModelFallbackStop(refusal);
+                  throw refusal;
+                }
                 const guardedCliSessionBinding =
                   cliSessionBinding && hasCliSessionReuseMetadata(cliSessionBinding)
                     ? cliSessionBinding
@@ -502,6 +535,7 @@ export function createCronPromptExecutor(
                   ),
                   provider: executionProvider,
                   authProfileId,
+                  nativeAuthOnly: trigger === "cron" && !binding ? true : undefined,
                   cliSessionId: cliSessionBinding?.sessionId,
                   cliSessionBinding: guardedCliSessionBinding,
                   cliSessionBindingFacts: {
@@ -541,7 +575,7 @@ export function createCronPromptExecutor(
               {
                 preparedRunAdmission: cronAdmission.preparedRunAdmission,
                 abortSignal: cliAbortSignal,
-                trigger: "cron",
+                trigger,
                 isFinalFallbackAttempt: runOptions.isFinalFallbackAttempt,
               },
             );
@@ -587,10 +621,28 @@ export function createCronPromptExecutor(
           requestedRouteResolution: "resolved",
           modelFallbacksOverride: runOptions.modelFallbacksOverride,
           resolvedModelSelection: runOptions.resolvedModelSelection,
-          authProfileId: params.liveSelection.authProfileId,
-          authProfileIdSource: params.liveSelection.authProfileId
-            ? params.liveSelection.authProfileIdSource
-            : undefined,
+          authProfileId: binding?.profileId ?? params.liveSelection.authProfileId,
+          ...(binding && inferenceAuthorization
+            ? {
+                authProfileBinding: {
+                  profileId: binding.profileId,
+                  authRequirement: binding.authRequirement,
+                  assertCurrent: inferenceAuthorization.assertCurrent,
+                  revalidate: inferenceAuthorization.revalidate,
+                },
+                allowAuthProfileFallback: false,
+                onSuccessfulAuthProfile: (profileId: string | undefined) => {
+                  if (profileId !== binding.profileId) {
+                    throw new Error("Automation inference account changed during execution.");
+                  }
+                },
+              }
+            : {}),
+          authProfileIdSource:
+            binding?.source ??
+            (params.liveSelection.authProfileId
+              ? params.liveSelection.authProfileIdSource
+              : undefined),
           // Cron keeps overload failures local while sharing real credential failures.
           authProfileFailurePolicy: runOptions.authProfileFailurePolicy ?? "local_transient",
           verboseLevel: params.resolvedVerboseLevel,
@@ -626,7 +678,7 @@ export function createCronPromptExecutor(
         throw error;
       })
       .finally(() => {
-        unregisterCronRunExecSource();
+        cronRunExecSource.dispose();
       });
     const executionError =
       params.lifecycle.getDeferredError() ??

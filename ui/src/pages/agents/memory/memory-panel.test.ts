@@ -123,9 +123,12 @@ function createPage(context: ApplicationContext): TestMemoryPanel {
 }
 
 async function replaceContext(page: TestMemoryPanel, context: ApplicationContext) {
-  page.context = context;
-  page.requestUpdate();
-  await page.updateComplete;
+  page.disconnect();
+  const replacement = createPage(context);
+  replacement.agentId = page.agentId;
+  replacement.connect();
+  await replacement.updateComplete;
+  return replacement;
 }
 
 afterEach(() => {
@@ -274,7 +277,7 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
 
   it("resets provider and modal state when the gateway source changes", async () => {
     const client = {} as GatewayBrowserClient;
-    const page = createPage(contextWithGateway(client, false));
+    let page = createPage(contextWithGateway(client, false));
     page.connect();
     await page.updateComplete;
     const previousState = page.dreaming;
@@ -288,7 +291,7 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
     page.toggleConfirmLoading = true;
     page.pendingEnabled = true;
 
-    await replaceContext(page, contextWithGateway(client, false));
+    page = await replaceContext(page, contextWithGateway(client, false));
 
     expect(page.dreaming).not.toBe(previousState);
     expect(page.dreaming.dreamDiaryContent).toBeNull();
@@ -307,8 +310,8 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
   });
 
   it.each([false, true])(
-    "discards a wiki response from a replaced gateway source (subscription rebound: %s)",
-    async (rebound) => {
+    "discards a wiki response from a replaced gateway source (remounted: %s)",
+    async (remounted) => {
       const pending = deferred<unknown>();
       const client = {
         request: vi.fn(() => pending.promise),
@@ -319,7 +322,7 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
 
       const preview = page.openWikiPage("old.md");
       const nextContext = contextWithGateway(client, false);
-      if (rebound) {
+      if (remounted) {
         await replaceContext(page, nextContext);
       } else {
         page.context = nextContext;
@@ -818,7 +821,7 @@ describe.runIf(process.env.OPENCLAW_UI_MEMORY_CHROMIUM_E2E === "1")(
         const picker = page.locator(".settings-sidebar openclaw-agent-select");
         await picker.locator(".agent-select__trigger").click();
         await picker
-          .locator("wa-dropdown-item[data-agent-option]")
+          .locator(".agent-select__option[data-agent-option]")
           .filter({ hasText: name })
           .evaluate((item) => (item as HTMLElement).click());
       };
@@ -877,18 +880,9 @@ describe.runIf(process.env.OPENCLAW_UI_MEMORY_CHROMIUM_E2E === "1")(
         await gateway.closeLatest(1001, "proxy idle timeout");
         await gateway.setOnline(false);
         await expect
-          .poll(
-            () =>
-              page.evaluate(
-                () =>
-                  (
-                    document.querySelector("openclaw-app") as HTMLElement & {
-                      runtime?: { context: { gateway: { snapshot: { phase: string } } } };
-                    }
-                  ).runtime?.context.gateway.snapshot.phase,
-              ),
-            { timeout: 15_000 },
-          )
+          .poll(() => page.evaluate(() => window.openclawControlUi?.snapshot().gatewayPhase), {
+            timeout: 15_000,
+          })
           .toBe("reconnecting");
         await expect
           .poll(() => gateway.getSocketCount(), { timeout: 15_000 })

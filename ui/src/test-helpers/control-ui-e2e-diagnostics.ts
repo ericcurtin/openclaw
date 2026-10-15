@@ -186,6 +186,7 @@ export function installControlUiRpcDiagnostics(page: Page): void {
             "agents.files.list",
             "agents.files.get",
             "agents.files.set",
+            "audit.run.inspect",
             "canvas.document.view",
             "chat.history",
             "chat.startup",
@@ -347,8 +348,10 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
       };
       const app = document.querySelector("openclaw-app");
       const shell = document.querySelector("openclaw-app-shell");
+      const runInspector = document.querySelector("#activity-run-panel");
       const diagnostics: ReturnType<ControlUiReadiness["hook"]["diagnostics"]> | undefined =
         window.openclawControlUi?.diagnostics();
+      const readiness = window.openclawControlUi?.snapshot();
       const agentsState = diagnostics?.roster;
       const gatewaySnapshot = diagnostics?.gateway;
       const customElementCounts: Record<string, number> = {};
@@ -391,6 +394,17 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
       );
       return {
         failureSummary: {
+          readiness: readiness
+            ? {
+                generation: readiness.generation,
+                booted: readiness.booted,
+                gatewayPhase: readiness.gatewayPhase,
+                routeReady: readiness.routeReady,
+                rosterReady: readiness.rosterReady,
+                ready: readiness.ready,
+                settlementFailed: diagnostics?.settlementError != null,
+              }
+            : null,
           sessionGroupDefaults: groupMode
             ? {
                 open: Reflect.get(groupMode, "open") === true,
@@ -465,6 +479,11 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
             editorPresent: Boolean(fileEditor),
             editorLength: fileEditor?.value.length ?? null,
             editorDisabled: fileEditor?.disabled ?? null,
+          },
+          runInspector: {
+            panelPresent: runInspector !== null,
+            executionIdentityPresent: runInspector?.hasAttribute("data-execution-id") ?? null,
+            runIdentityPresent: runInspector?.hasAttribute("data-run-id") ?? null,
           },
           gatewayPhase: safeValue(gatewaySnapshot?.phase, [
             "stopped",

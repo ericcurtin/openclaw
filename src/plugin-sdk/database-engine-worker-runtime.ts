@@ -1,5 +1,6 @@
 /** Worker/admission-only physical store opening and transaction capabilities. */
 export { openEngineStore } from "../infra/database-engine/open.js";
+export { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 export {
   runEngineStoreReadSnapshot,
   runEngineWorkerWrite,
@@ -10,3 +11,4 @@ export type {
   DatabaseEngineAdapter,
 } from "../infra/database-engine/contract.js";
 export type { DatabaseEngineInput } from "../infra/database-engine/config.js";
+export { jsonPathValue } from "../infra/database-engine/json-values.js";
