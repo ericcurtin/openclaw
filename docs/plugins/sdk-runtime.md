@@ -128,7 +128,9 @@ local tool calls are also denied, with at most two additional inference attempts
 On Anthropic, changing tool choice invalidates the messages cache, but preserves
 the tool and system caches. Other APIs without a supported hosted-tool prohibition
 are rejected when the recorded request contains tools.
-Snapshots stay in bounded process memory until expiry or session cleanup.
+The built-in runtime keeps snapshots for up to 90 minutes, with a shared 64 MiB
+request-data budget and at most 1,000 sessions, until expiry or session cleanup.
+Keeping a snapshot does not retain the completed parent session or its transcript manager.
 The built-in runtime retains the prepared provider prefix instead of a second copy
 of conversation history. Forks convert only later publications and the side question;
 HTTP continuations retain the full prefix even when the parent sends only a suffix.
@@ -541,6 +543,17 @@ metadata, including page globals and audio/manual-action prefixes.
 `lifecycleSource` and `manualActionSource`. Callbacks receive shared fragments for
 guest names, preserved identity, virtual audio input, microphone control, and
 manual actions. Existing string-based callers keep their generated source.
+
+## Browser meeting configuration
+
+Use `resolveMeetingChromeConfig` and `resolveMeetingRealtimeConfig` from
+the production-private `openclaw/plugin-sdk/meeting-config` subpath when sharing browser-meeting settings.
+This lightweight entry point parses common Chrome, audio, realtime, and provider-map
+fields without loading meeting engines or transports. Pass object records for
+each section; the adapter retains its format aliases, in-call timeout default,
+realtime instructions, and transcription-provider default. The same subpath exposes
+`buildMeetingConfigAudioCommands` for default audio command pairs; command construction
+uses the shared audio backend owner without starting it.
 
 ## Browser meeting status ownership
 

@@ -47,7 +47,7 @@ const sidebarAgentProps = () => ({
   agentIdentity: {
     get: () => null,
     entries: () => [],
-    ensure: async () => {},
+    ensure: vi.fn(async () => {}),
     invalidate: () => {},
     subscribe: () => () => {},
   },
@@ -665,6 +665,7 @@ describe("Settings agent selector", () => {
       expect(container.querySelectorAll("openclaw-agent-select")).toHaveLength(1);
       const selector = container.querySelector<AgentSelectElement>("openclaw-agent-select")!;
       await selector.updateComplete;
+      expect(props.agentIdentity.ensure).toHaveBeenCalledWith(["main"]);
       expect(
         selector.querySelector(".agent-select__trigger")?.getAttribute("aria-label"),
       ).toContain("Main");
@@ -674,12 +675,26 @@ describe("Settings agent selector", () => {
       const trigger = selector.querySelector<HTMLButtonElement>(".agent-select__trigger")!;
       trigger.click();
       await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
+      expect(props.agentIdentity.ensure).toHaveBeenCalledWith(["main", "research"]);
       const research = selector.querySelector<HTMLElement>('[aria-label="Research"]')!;
       research.click();
       await waitForSolid(() =>
         expect(props.settingsAgentSelection.set).toHaveBeenCalledWith("research"),
       );
       expect(props.onNavigate).not.toHaveBeenCalled();
+      render(
+        {
+          ...props,
+          settingsAgentSelection: {
+            ...props.settingsAgentSelection,
+            state: { selectedId: "research", scopeId: "research" },
+          },
+        },
+        container,
+      );
+      await waitForSolid(() =>
+        expect(props.agentIdentity.ensure).toHaveBeenLastCalledWith(["research"]),
+      );
     },
   );
 
