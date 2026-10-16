@@ -78,7 +78,7 @@ requires failure recovery.
 Channel probe failures, stopped channels, and health collection timeouts are
 warnings during post-update verification.
 The Gateway must still answer, report the expected version and build, pass HTTP
-readiness, and pass the normal health-settle checks. A channel fault that also
+readiness, and pass the normal health checks. A channel fault that also
 makes HTTP readiness fail still fails verification. Timeout warnings remain in the update report even
 if a later probe completes; run `openclaw health` to check the affected channels.
 The seven-second collection budget is unchanged. Updated Gateways also avoid
@@ -680,7 +680,7 @@ or checkout swap, required `doctor --fix` migrations, and state compatibility
 inspection, followed by service start
 in `restarting`. Update verification does not use model inference. In `verifying`,
 the updater checks that the managed service is running and owns its port, requires
-the normal 12-check health settle and a Gateway hello handshake matching the
+successful health checks and a Gateway hello handshake matching the
 expected version and Git build identity, and requires HTTP 200 from `/readyz`.
 Plugin activation or load failures remain named warnings
 when these core checks pass; they do not turn a successful core update into an error.
@@ -698,6 +698,16 @@ The new version can be running while verification fails. Recovery guidance uses 
 latest observed service state and names the running version when known; an
 earlier activation stop does not mean the service remains stopped.
 
+If update recovery finds its managed service still stopped, an unverified service
+definition or installer backup receipt does not prohibit starting the installed
+runtime. The updater preserves the existing definition, revalidates service
+ownership, restarts through the service owner, and verifies normal readiness.
+Successful recovery completes with a warning and retains package backups for
+`openclaw update repair`. Failed startup reports its concrete error and directs
+you to `openclaw update repair` and `openclaw gateway status --deep`.
+Only named data risks, such as unsettled Doctor writers or unverified migrated
+state, instruct you to keep the Gateway stopped.
+
 Respawn and update verification use the same progress-aware readiness wait as
 Gateway restart. Startup that continues making progress can use the existing
 five-minute startup lease. If that lease ends while the same Gateway is still
@@ -711,8 +721,8 @@ settles. A version that has not yet been observed is unknown; a version mismatch
 requires an observed serving version that disagrees with the installed target.
 
 When the readiness allowance expires for a running Gateway while the restart
-owner reports waiting for a listener, startup migration, or
-healthy settling, the updater records the elapsed wait and startup phase as a warning. It leaves the process starting, keeps readiness
+owner reports waiting for a listener or startup migration, the updater records
+the elapsed wait and startup phase as a warning. It leaves the process starting, keeps readiness
 unconfirmed, and retains recovery backups. The run ends `skipped` with reason
 `gateway-readiness-unverified`, recording an intentional unverified outcome rather
 than success or an indefinite pending run. A PID or boot-generation change alone

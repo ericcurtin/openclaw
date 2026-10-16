@@ -18,6 +18,10 @@ import type { SimpleCompletionModelResolver } from "../agents/simple-completion-
 import { bindModelLlmRuntime } from "../llm/model-runtime-binding.js";
 import type { Model } from "../llm/types.js";
 import {
+  attachProviderAuthAuthority,
+  getProviderAuthAuthority,
+} from "../plugins/provider-auth-authority.js";
+import {
   attachModelProviderRuntimePluginHandle,
   resolveProviderRuntimePluginHandle,
 } from "../plugins/provider-hook-runtime.js";
@@ -200,6 +204,7 @@ async function prepareResolvedImageRuntime(
   ) {
     return bindResolvedImageRuntime(params, "", bindPreparedModel(model));
   }
+  model = attachProviderAuthAuthority(model, getProviderAuthAuthority(apiKeyInfo));
   let apiKey = requireApiKey(apiKeyInfo, model.provider);
   const runtimeAuth = await prepareProviderRuntimeAuth({
     provider: model.provider,

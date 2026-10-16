@@ -2,6 +2,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { resolveProviderAuthScope } from "../plugins/provider-auth-scope.js";
 import { ensureAuthProfileStoreAsync } from "./auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { reconcileAuthProfileQuotaBlocks } from "./auth-profiles/usage.js";
@@ -53,16 +54,25 @@ export async function resolveCompletionModelAuth(params: {
   assertCurrent?: () => void;
 }): Promise<CompletionModelAuth> {
   const { model: initialModel } = params;
-  const authStore =
-    params.authStore ??
-    (params.onAuthProfiles || params.bindAuthOwner || initialModel.provider === "openai"
-      ? await ensureAuthProfileStoreAsync(params.agentDir, {
-          readOnly: true,
-          allowKeychainPrompt: false,
-          config: params.cfg,
-          profileId: params.profileId,
-        })
-      : undefined);
+  const pluginOwnedAuth =
+    resolveProviderAuthScope({
+      provider: initialModel.provider,
+      config: params.cfg,
+      workspaceDir: params.workspaceDir,
+      pluginMetadataSnapshot: params.metadataSnapshot,
+    }) === "plugin";
+  // Plugin-owned credentials must not depend on opening an agent store or its health state.
+  const authStore = pluginOwnedAuth
+    ? undefined
+    : (params.authStore ??
+      (params.onAuthProfiles || params.bindAuthOwner || initialModel.provider === "openai"
+        ? await ensureAuthProfileStoreAsync(params.agentDir, {
+            readOnly: true,
+            allowKeychainPrompt: false,
+            config: params.cfg,
+            profileId: params.profileId,
+          })
+        : undefined));
 
   const authParams = {
     provider: initialModel.provider,
@@ -81,7 +91,9 @@ export async function resolveCompletionModelAuth(params: {
       ? { allowAuthProfileFallback: false }
       : {}),
   } satisfies Parameters<typeof prepareAgentRuntimeAuth>[0];
-  await reconcileAuthProfileQuotaBlocks(authParams);
+  if (!pluginOwnedAuth) {
+    await reconcileAuthProfileQuotaBlocks(authParams);
+  }
   params.assertCurrent?.();
   params.signal?.throwIfAborted();
 
@@ -129,10 +141,10 @@ export async function resolveCompletionModelAuth(params: {
     env: process.env,
   });
   const preparedAuth =
-    routeResolution?.kind === "routes" || params.onAuthProfiles
+    pluginOwnedAuth || routeResolution?.kind === "routes" || params.onAuthProfiles
       ? prepareAgentRuntimeAuth({ ...authParams, routeIntent })
       : undefined;
-  if (!preparedAuth || !authStore) {
+  if (!preparedAuth || !(authStore || pluginOwnedAuth)) {
     return {
       auth: await getApiKeyForModelCore({
         model: initialModel,
@@ -200,12 +212,19 @@ export async function resolveCompletionModelAuth(params: {
       }),
     errorMessage: "Simple completion auth attempts could not be resolved.",
   });
-  params.onAuthProfiles?.(authStore, [
-    ...new Set(
-      preparedAuth.attempts.flatMap((attempt) =>
-        attempt.kind === "profile" ? [attempt.profileId] : [],
+  if (authStore) {
+    params.onAuthProfiles?.(authStore, [
+      ...new Set(
+        preparedAuth.attempts.flatMap((attempt) =>
+          attempt.kind === "profile" ? [attempt.profileId] : [],
+        ),
       ),
-    ),
-  ]);
-  return { auth: resolved.auth, model: resolved.model, routed: true, authStore };
+    ]);
+  }
+  return {
+    auth: resolved.auth,
+    model: resolved.model,
+    routed: true,
+    ...(authStore ? { authStore } : {}),
+  };
 }

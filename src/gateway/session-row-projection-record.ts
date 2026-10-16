@@ -42,7 +42,6 @@ export type PreparedSessionRowDatabaseFacts = SessionRowDatabaseFacts & {
   acpMeta: SessionAcpMeta | null;
   runtimeOwnership: AgentHarnessSessionRuntimeOwnership | null;
   runtimeOwnershipDependencies: readonly PluginStateReadDependency[];
-  runtimeOwnershipRetryPending?: true;
   repositoryWorkspace: SessionRepositoryWorkspaceRecord | null;
 };
 
@@ -51,11 +50,7 @@ export type RetainedSessionRowDatabaseFacts = SessionRowDatabaseFacts &
   Partial<
     Pick<
       PreparedSessionRowDatabaseFacts,
-      | "acpMeta"
-      | "runtimeOwnership"
-      | "runtimeOwnershipDependencies"
-      | "runtimeOwnershipRetryPending"
-      | "repositoryWorkspace"
+      "acpMeta" | "runtimeOwnership" | "runtimeOwnershipDependencies" | "repositoryWorkspace"
     >
   >;
 
@@ -74,9 +69,8 @@ export function isPreparedSessionRowDatabaseFacts(
 /** Opaque legacy/external ownership must be prepared again whenever its row becomes dirty. */
 export function canRetainSessionRowRuntimeOwnership(facts: PreparedSessionRowDatabaseFacts) {
   return (
-    !facts.runtimeOwnershipRetryPending &&
-    (facts.runtimeOwnershipDependencies.length > 0 ||
-      resolveSessionPinnedHarnessId(facts.entry) === undefined)
+    facts.runtimeOwnershipDependencies.length > 0 ||
+    resolveSessionPinnedHarnessId(facts.entry) === undefined
   );
 }
 
@@ -543,7 +537,10 @@ export function index(
   updateIndex(byKey, `key:${row.key}`, id, deleting);
   updateIndex(byKey, row.entry && `id:${row.entry.sessionId}`, id, deleting);
   updateIndex(byKey, logical(row.agentId, row.key), id, deleting);
-  updateIndex(byKey, physical(row.storeTarget.storePath, row.key), id, deleting);
+  // Only raw sentinel parents resolve by physical store; ordinary parents resolve logically.
+  if (row.key === "global" || row.key === "unknown") {
+    updateIndex(byKey, physical(row.storeTarget.storePath, row.key), id, deleting);
+  }
   for (const parent of row.parents) {
     updateIndex(byParent, parent, id, deleting);
   }
