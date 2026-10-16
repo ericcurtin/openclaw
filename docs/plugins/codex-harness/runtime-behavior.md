@@ -32,6 +32,8 @@ Codex tool search under the `openclaw` namespace, keeping the initial model
 context smaller. The restricted-turn shell fallback is the exception for
 `exec` and `process` when a finite allowlist disables native Code Mode;
 runtime allowlists and `codexDynamicToolsExclude` still apply.
+Strict [`agent exec`](/cli/agent#agent-exec) runs also use OpenClaw's tools so
+their process cleanup stays with the one-shot run owner.
 When native shell remains active and Gateway access is policy-eligible,
 OpenClaw instead publishes the distinct `gateway_exec` and `gateway_process`
 names so native shell and the OpenClaw-managed environment path cannot be
@@ -178,8 +180,11 @@ to the app-server normally.
 Failed app-server startup waits for child shutdown before returning its error.
 If startup times out or is canceled during process registration, cleanup joins
 that registration and closes any late child. Cleanup can extend beyond the
-startup deadline. A canceled caller leaves startup running when another caller
-still owns it.
+startup deadline. A registration failure keeps its specific error when it settles
+during that cleanup, instead of becoming a generic initialization timeout.
+Canceling a shared-client waiter leaves service-owned startup running even if it
+was the only waiter. Later callers can join it; once ready, an unused client
+retires after the idle grace. Isolated startup remains caller-owned.
 
 OpenClaw preserves assistant text supplied with the initial native item and
 reasoning supplied with a completed item, even when Codex sends no text deltas.
