@@ -1,5 +1,6 @@
 import { sql } from "kysely";
 import { jsonArrayFrom, jsonObjectFrom } from "../../infra/database-engine/json-values.js";
+import { getPostgresPhysicalFacts } from "../../infra/database-engine/physical-facts.js";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -20,6 +21,10 @@ import type {
   SessionActorVersion,
 } from "./session-actor-contract.js";
 import type { SessionActorStoredState } from "./session-actor-hydration.types.js";
+import {
+  retainSessionActorTranscriptWindow,
+  SESSION_ACTOR_TRANSCRIPT_WINDOW,
+} from "./session-actor-transcript-window.worker.js";
 import { canonicalSessionValidationQuery } from "./session-canonical-key.js";
 import { sessionColdArchiveMetadataColumns } from "./session-cold-storage-state.js";
 import { sessionEntrySnapshotColumnsForKeys } from "./session-entry-snapshots.js";
@@ -60,7 +65,13 @@ export function hydrateSessionActorState(
 ): SessionActorStoredState {
   const keys = collectSessionEntryLookupKeys(target.sessionKey);
   const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db);
-  const tables = getAdmittedSqliteSchemaFacts(database.db)?.tables;
+  const tables =
+    getAdmittedSqliteSchemaFacts(database.db)?.tables ??
+    new Set(
+      getPostgresPhysicalFacts(database.db)
+        ?.catalog.filter((fact) => fact.kind === "table")
+        .map((fact) => fact.table),
+    );
   const rows = executeSqliteQuerySync(
     database.db,
     canonicalSessionValidationQuery(database, { metadata: true })
@@ -213,6 +224,19 @@ export function hydrateSessionActorState(
               eb.ref("session_nodes.current_session_id"),
             ),
         ).as("actor_projection"),
+        eb
+          .exists(
+            db
+              .selectFrom("session_transcript_active_events")
+              .select("session_id")
+              .where(
+                "session_transcript_active_events.session_id",
+                "=",
+                eb.ref("session_nodes.current_session_id"),
+              )
+              .where("context_eligible", "is", null),
+          )
+          .as("actor_has_unclassified"),
         jsonArrayFrom(
           database.db,
           db
@@ -231,7 +255,8 @@ export function hydrateSessionActorState(
               "=",
               eb.ref("session_nodes.current_session_id"),
             )
-            .orderBy("seq"),
+            .orderBy("seq", "desc")
+            .limit(SESSION_ACTOR_TRANSCRIPT_WINDOW + 1),
           ["seq"],
         ).as("actor_identities"),
         jsonArrayFrom(
@@ -250,7 +275,8 @@ export function hydrateSessionActorState(
               "=",
               eb.ref("session_nodes.current_session_id"),
             )
-            .orderBy("active_position"),
+            .orderBy("active_position", "desc")
+            .limit(SESSION_ACTOR_TRANSCRIPT_WINDOW + 1),
           ["active_position"],
         ).as("actor_active"),
         jsonArrayFrom(
@@ -269,7 +295,8 @@ export function hydrateSessionActorState(
               sql<number>`${transcriptEventReadBytesSql()} + 1`.as("serialized_bytes"),
             ])
             .where("transcript_events.session_id", "=", eb.ref("session_nodes.current_session_id"))
-            .orderBy("seq"),
+            .orderBy("seq", "desc")
+            .limit(SESSION_ACTOR_TRANSCRIPT_WINDOW + 1),
           ["seq"],
         ).as("actor_navigation"),
       ])
@@ -336,18 +363,22 @@ export function hydrateSessionActorState(
     : undefined;
   const projection = selected ? decodeJsonProjection(selected.actor_projection) : undefined;
   const identities = new Map(
-    (selected ? decodeJsonProjection(selected.actor_identities) : []).map((row) => [
-      row.event_id,
-      row,
-    ]),
+    (selected
+      ? decodeJsonProjection(selected.actor_identities).toSorted((a, b) => a.seq - b.seq)
+      : []
+    ).map((row) => [row.event_id, row]),
   );
   const active = new Map(
-    (selected ? decodeJsonProjection(selected.actor_active) : []).map((row) => [
-      row.event_seq,
-      row,
-    ]),
+    (selected
+      ? decodeJsonProjection(selected.actor_active).toSorted(
+          (a, b) => a.active_position - b.active_position,
+        )
+      : []
+    ).map((row) => [row.event_seq, row]),
   );
-  const storedNavigation = selected ? decodeJsonProjection(selected.actor_navigation) : [];
+  const storedNavigation = selected
+    ? decodeJsonProjection(selected.actor_navigation).toSorted((a, b) => a.seq - b.seq)
+    : [];
   const navigation = storedNavigation.map((row) =>
     Object.assign(
       // SAFETY: SQL selects only tree fields; the tree reader owns their interpretation.
@@ -389,6 +420,7 @@ export function hydrateSessionActorState(
     pendingInputs,
     completions,
     transcript: {
+      complete: true,
       coldArchive,
       identities,
       active,
@@ -401,13 +433,12 @@ export function hydrateSessionActorState(
             indexedSeq: projection.indexed_seq,
             leafEventId: projection.leaf_event_id,
             needsRebuild: projection.needs_rebuild !== 0,
-            hasUnclassifiedEvents: [...active.values()].some(
-              (row) => row.context_eligible === null,
-            ),
+            hasUnclassifiedEvents: Boolean(selected?.actor_has_unclassified),
           }
         : undefined,
     },
   };
+  retainSessionActorTranscriptWindow(state);
   seedSessionActorContextMetadata(state, storedNavigation);
   state.hot = projectSessionActorHotState(state);
   return state;
@@ -438,7 +469,9 @@ export function projectSessionActorHotState(state: SessionActorStoredState): Ses
       modelContext: { kind: "resident", entries: [] },
     },
   };
-  hot.transcript.projection = projectSessionTranscriptFacts(state);
+  hot.transcript.projection = state.transcript.complete
+    ? projectSessionTranscriptFacts(state)
+    : undefined;
   hot.dependencySessionIds = [
     ...new Set([
       ...[...state.entryRows.values()].flatMap((row) => (row ? [row.entry.sessionId] : [])),

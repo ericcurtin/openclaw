@@ -8,11 +8,11 @@ describe("database engine selection", () => {
     );
   });
 
-  it("registers PostgreSQL support for completed plugin families", () => {
+  it("registers PostgreSQL support for completed store families", () => {
     expect(
       listDatabaseEngineStores()
         .filter((store) => store.postgres)
         .map((store) => store.id),
-    ).toEqual(["workboard", "logbook", "team-reports"]);
+    ).toEqual(["state", "agent", "workboard", "logbook", "team-reports"]);
   });
 });
