@@ -17,7 +17,6 @@ import {
   resolveSqliteInspectionSignal,
   sqliteInspectionTimeoutError,
 } from "../infra/sqlite-readonly-worker.js";
-import { getCanonicalSqliteTableNames } from "../infra/sqlite-schema-contract.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { agentSchemaMetadataKey } from "./openclaw-agent-db-metadata.js";
 import { agentDatabaseValidationKey } from "./openclaw-agent-db-validation-facts.js";
@@ -29,7 +28,6 @@ import type {
   AgentSchemaInspection,
   AgentSchemaInspectionInput,
 } from "./openclaw-agent-schema-inspection.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import type {
   StateSchemaInspection,
   StateSchemaInspectionInput,
@@ -134,17 +132,19 @@ export function createAgentSchemaInspectionWorker() {
               () => undefined,
             )?.agentId;
           if (!agentId) {
-            const { resolveSessionSqliteTargetInWorker } =
-              await import("../config/sessions/session-transcript-read-worker-runtime.js");
-            const target = await resolveSessionSqliteTargetInWorker(
-              {
-                storePath: input.pathname,
-                env: input.env ?? process.env,
-                registeredDatabases: [],
-              },
+            const { prepareSqliteTargetFromSessionStorePath } =
+              await import("../config/sessions/session-sqlite-target.js");
+            const target = await prepareSqliteTargetFromSessionStorePath(
+              input.pathname,
+              { env: input.env ?? process.env },
               signal,
             );
-            if (target.ownerSource !== "database-path" || !target.agentId) {
+            if (
+              !target.agentId ||
+              (target.ownerSource !== undefined &&
+                target.ownerSource !== "database-path" &&
+                target.ownerSource !== "database-registry")
+            ) {
               throw new Error(
                 "PostgreSQL schema inspection could not establish the custom store owner.",
               );
@@ -207,10 +207,6 @@ export function createAgentSchemaInspectionWorker() {
             };
           }
         }
-        if (kind === "agent" && input.requireStartupMigrationReadiness) {
-          // Only an admission miss needs comparison templates in later runtime workers.
-          getCanonicalSqliteTableNames(OPENCLAW_AGENT_SCHEMA_SQL);
-        }
         const snapshot = snapshotPath
           ? { pathname: snapshotPath, identity: readSqliteIntegrityFileIdentity(snapshotPath) }
           : undefined;
@@ -264,7 +260,6 @@ export function createAgentSchemaInspectionWorker() {
               }
               response.resolve({
                 ...stateInspection,
-                schemaContracts: message.schemaContracts,
                 inspectionErrors: stateInspection.inspectionErrors.map(
                   restoreAgentSchemaInspectionError,
                 ),

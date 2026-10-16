@@ -8,7 +8,7 @@ import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-requ
 import { copyExplicitSkillSelectionFileHost } from "../../../skills/discovery/skill-command-provenance.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { createAgentHarnessCompletionScope } from "../../agent-harness-completion-scope.js";
-import { resolveDelegationCapability } from "../../delegation-capability.js";
+import { prepareDelegationCapability } from "../../delegation-capability.js";
 import { agentHarnessBuildsOpenClawTools } from "../../harness/tool-surface.js";
 import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../model-auth.js";
 import { recordAdmittedModelRoutingDecision } from "../../model-routing-decision.js";
@@ -23,6 +23,7 @@ import { log } from "../logger.js";
 import { remapExplicitSkillSelectionPath, remapSkillReferencePaths } from "../sandbox-skills.js";
 import { prepareEmbeddedSkills } from "../skill-runtime.js";
 import { mapThinkingLevelForProvider } from "../utils.js";
+import { createAttemptContinuationRetryCount } from "./attempt-continuation-retry.js";
 import { prepareExecApprovalContinuationForAttempt } from "./attempt-exec-approval-continuation.js";
 import { withPreparedEmbeddedGatewayTools } from "./attempt-gateway-tools.js";
 import { resolveEmbeddedAttemptMemoryAudience } from "./attempt-memory-audience.js";
@@ -252,6 +253,12 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     : null;
   assertActiveRun();
   const pluginWorkspace = placement?.workspace;
+  const continuationRetryCount = createAttemptContinuationRetryCount(
+    params,
+    runtime,
+    { sessionId, agentDir },
+    assertActiveRun,
+  );
   const promptMedia = pluginWorkspace
     ? await prepareEmbeddedAttemptPromptExecution({
         attempt: { ...params, model: effectiveModel },
@@ -323,6 +330,15 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     };
     skillReferencePaths = prepared.skillUsagePaths;
   }
+  const delegationCapability = await prepareDelegationCapability({
+    fallbackActive,
+    run: params,
+    sessionKey: resolvedSessionKey,
+    sessionId,
+    modelProvider: provider,
+    modelId,
+  });
+  assertActiveRun();
   // Resolve after the last fallible preparation so the attempt's finally owns the leases.
   const { memoryAudience, release: releaseMemoryAudience } =
     await resolveEmbeddedAttemptMemoryAudience({
@@ -490,12 +506,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     requestedModelId,
     fallbackActive,
     fallbackReason,
-    delegationCapability: resolveDelegationCapability({
-      fallbackActive,
-      inputProvenance: params.inputProvenance,
-      disableTools: params.disableTools,
-      toolsAllow: params.toolsAllow,
-    }),
+    delegationCapability,
     isFinalFallbackAttempt: params.isFinalFallbackAttempt,
     agentHarnessId: runtime.agentHarness.id,
     agentHarnessRuntimeOverride: runtime.agentHarness.id,
@@ -527,7 +538,10 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     runtimePlan,
     observeToolTerminal: createToolTerminalObserver(params.runId),
     model: applyAuthHeaderOverride(
-      applyLocalNoAuthHeaderOverride(effectiveModel, runtime.apiKeyInfo),
+      applyLocalNoAuthHeaderOverride(
+        effectiveModel,
+        runtime.runtimeAuthState ?? runtime.apiKeyInfo,
+      ),
       runtime.runtimeAuthState !== null ? null : runtime.apiKeyInfo,
       runtime.transportConfig,
     ),
@@ -665,6 +679,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
       sessionPromptState.activePrompt.persisted = false;
     },
     prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
+    ...continuationRetryCount.capability,
   };
   let rawAttempt: EmbeddedRunAttemptResult;
   try {
@@ -701,6 +716,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
   if (pluginWorkspace?.sandboxRuntime) {
     rawAttempt.sandboxRuntime = pluginWorkspace.sandboxRuntime;
   }
+  continuationRetryCount.applyTo(rawAttempt);
   return {
     dispatchedAttempt: { rawAttempt, preparedAttempt: attemptParams },
     runtimePlan,
