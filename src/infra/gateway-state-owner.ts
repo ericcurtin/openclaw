@@ -398,7 +398,13 @@ export function acquireGatewayStateOwner(params: {
     );
   }
   const payload = params.payload
-    ? { ...params.payload, ownerId: params.payload.ownerId ?? randomUUID() }
+    ? {
+        ...(params.payload.role === "sqlite-maintenance"
+          ? defaultPayload(params.databasePath)
+          : {}),
+        ...params.payload,
+        ownerId: params.payload.ownerId ?? randomUUID(),
+      }
     : defaultPayload(params.databasePath);
   const owner: ProcessOwner = {
     kind: "process",
@@ -654,8 +660,10 @@ function assertStateDatabaseReadAtOwnerPath(
     !hasPhysicalOwnership(owner) ||
     (owner.getProjection && !owner.getProjection()?.verifyStillHeld())
   ) {
+    // A recorded loss already names the lock and the restart step; rethrow it unwrapped.
+    owner.lost.signal.throwIfAborted();
     throw new Error(
-      `OpenClaw state ownership at ${databasePath} was lost: ${owner.lost.signal.reason ?? "owner lock was removed or replaced"}; restart the Gateway.`,
+      `OpenClaw state ownership at ${databasePath} was lost: owner lock was removed or replaced; restart the Gateway.`,
     );
   }
   readOwnerPaths.set(key, owner);
@@ -666,7 +674,7 @@ export function assertStateDatabaseAccessAllowed(
   databasePath: string,
   captured?: {
     maintenanceScope?: OpenClawDatabaseMaintenanceScope;
-    schemaLease?: StateDatabaseSchemaLease;
+    schemaLease?: Pick<StateDatabaseSchemaLease, "assertDatabaseAccess">;
   },
 ): void {
   assertStateDatabaseAccessAtOwnerPath(

@@ -6,9 +6,10 @@ import {
   prepareGatewayRunBootstrap,
   recheckGatewayRunBootstrap,
 } from "../cli/gateway-cli/pre-bootstrap.js";
-import { recordGatewayBootStart } from "../infra/gateway-boot-lifecycle.js";
+import { beginGatewayBootLifecycle } from "../infra/gateway-boot-lifecycle.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as checkpoint from "../infra/startup-migration-checkpoint.js";
+import * as metadataWorker from "../plugins/plugin-metadata-state-worker.js";
 import { ExitError } from "../runtime.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -54,7 +55,7 @@ it.each(["current", "webhook-repair"] as const)(
       openOpenClawStateDatabase({ path: path.join(stateDir, "state", "openclaw.sqlite") });
       closeOpenClawStateDatabaseForTest();
       if (source === "webhook-repair") {
-        recordGatewayBootStart(process.env, 1_800_000_000_000);
+        await beginGatewayBootLifecycle(process.env, 1_800_000_000_000);
       }
       await fs.writeFile(configPath, original);
       const runtime = {
@@ -102,11 +103,24 @@ it.each(["current", "webhook-repair"] as const)(
         expect(await fs.readFile(configPath, "utf8")).toBe(original);
         await expect(fs.stat(`${configPath}.bak`)).rejects.toMatchObject({ code: "ENOENT" });
       } else {
+        const reads = vi.spyOn(metadataWorker, "readPluginMetadataStateRow");
+        const verificationReads: number[] = [];
+        options.measure = async (name, run) => {
+          if (name !== "doctor.config-preflight.plugin-plan") {
+            return await run();
+          }
+          const before = reads.mock.calls.length;
+          const value = await run();
+          verificationReads.push(reads.mock.calls.length - before);
+          return value;
+        };
         const ready = await runStartupConfigPreflight(options);
         expect(ready.snapshot.valid).toBe(true);
+        expect(verificationReads).toEqual([0]);
         expect(await fs.readFile(configPath, "utf8")).toBe(original);
         await expect(fs.stat(`${configPath}.bak`)).rejects.toMatchObject({ code: "ENOENT" });
         expect((await runStartupConfigPreflight(options)).snapshot.valid).toBe(true);
+        expect(verificationReads).toEqual([0, 0]);
         expect(await fs.readFile(configPath, "utf8")).toBe(original);
         await fs.writeFile(configPath, replacement);
         await expect(runStartupConfigPreflight(options)).rejects.toMatchObject({ code: 1 });
