@@ -289,8 +289,10 @@ curl http://localhost:1234/api/v1/models
 ### Preload fails or the model loads with a small context
 
 If preload keeps failing or LM Studio loads the model below your `contextTokens`, try
-[llmman](/providers/llmman) as the local server. It loads the model on the first request at its
-trained context and uses the generic OpenAI-compatible path, so there is no preload step.
+[llmman](/providers/llmman) as the local server. It loads the model on the first request and uses
+the generic OpenAI-compatible path, so there is no preload step. Its context is capped by the
+trained context and `LLMMAN_CONTEXT_LENGTH`, so match `contextTokens` to what `llmman ps` shows
+(see [Context windows](/providers/llmman#advanced-configuration)).
 
 ## Related
 
