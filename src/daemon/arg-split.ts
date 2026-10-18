@@ -14,6 +14,8 @@ export function splitArgsPreservingQuotes(
 ): string[] {
   const args: string[] = [];
   let current = "";
+  // A quote pair makes a word even when it is empty, so `""` stays an argument.
+  let quoted = false;
   let quoteChar: ArgSplitQuoteChar | null = null;
   const escapeMode = options?.escapeMode ?? "none";
   const quoteChars = new Set<ArgSplitQuoteChar>(options?.quoteChars ?? ['"']);
@@ -41,19 +43,21 @@ export function splitArgsPreservingQuotes(
       const canOpenQuote = quoteStart === "anywhere" || current.length === 0;
       if (!quoteChar && canOpenQuote) {
         quoteChar = char as ArgSplitQuoteChar;
+        quoted = true;
         continue;
       }
     }
     if (!quoteChar && /\s/.test(char)) {
-      if (current) {
+      if (current || quoted) {
         args.push(current);
         current = "";
+        quoted = false;
       }
       continue;
     }
     current += char;
   }
-  if (current) {
+  if (current || quoted) {
     args.push(current);
   }
   return args;

@@ -28,6 +28,12 @@ describe("cmd argv helpers", () => {
     expect(parseCmdScriptCommandLine(encoded)).toEqual(args);
   });
 
+  it("round-trips an empty argument", () => {
+    const args = ["C:\\openclaw\\node.exe", "gateway", "--label", "", "--port", "18789"];
+    const encoded = args.map((arg) => quoteCmdScriptArg(arg)).join(" ");
+    expect(parseCmdScriptCommandLine(encoded)).toEqual(args);
+  });
+
   it("rejects CR/LF in command arguments", () => {
     expect(() => quoteCmdScriptArg("bad\narg")).toThrow(/Command argument cannot contain CR or LF/);
     expect(() => quoteCmdScriptArg("bad\rarg")).toThrow(/Command argument cannot contain CR or LF/);
