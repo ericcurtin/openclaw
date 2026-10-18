@@ -9,6 +9,16 @@ read_when:
 Checks 0-2 cover config normalization and the legacy config key migrations,
 plus how doctor publishes shared-state schema during an update.
 
+Doctor applies known migrations before removing unrecognized config keys, including
+during updates. Repairs use the normal config backup and write flow. Inputs retained
+for a deferred plugin migration remain untouched until their owner can migrate them.
+
+Legacy `memorySearch` moves to `memory.search`, audio model lists move to
+capability-tagged `tools.media.models`, and node command restrictions move to
+`gateway.nodes.commands`. Doctor also makes legacy multi-agent ownership explicit
+and removes obsolete `meta.lastTouchedAt`, `commands.ownerDisplay`, and
+`gateway.tailscale.resetOnExit` settings.
+
 Plugin config repairs run in order on private config copies. If a repair throws,
 Doctor keeps the config from before that hook, reports the failure, and continues
 with the remaining repairs. Warning-only results stay visible without changing
@@ -17,6 +27,15 @@ config. Repair the affected plugin, then run `openclaw doctor --fix` again.
 Doctor keeps plugin repair and diagnostic contracts available through later health
 checks and service finalization. It releases its private plugin resources when
 the flow ends, including failed runs.
+
+## Group allowlist fallback
+
+For channels that support legacy DM sender fallback, Doctor copies `allowFrom`
+into an absent `groupAllowFrom`. It preserves explicit lists, including `[]`, at
+channel and account scope, and accounts keep inherited explicit channel lists.
+The migration also leaves lists absent when the effective account, channel, or
+global-default `groupPolicy` disables groups. Explicit policy overrides still
+apply. Update-time Doctor repair follows the same rules.
 
 ## Cloud setup secret migration
 

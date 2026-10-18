@@ -14,6 +14,7 @@ export type ChatPage = ChatPageHost & {
 defineSolidBridge<ChatPageProps>(
   "openclaw-chat-page",
   (props, host) => {
+    // The fallback application is lifetime-stable; page state follows replacement props.context.
     const application = untrack(() => props.context ?? useApplication());
     const state = createChatPageState(host, props, application);
     Object.defineProperty(host, "sessionSplitAvailable", {
@@ -34,6 +35,7 @@ defineSolidBridge<ChatPageProps>(
     properties: {
       data: { default: undefined!, attribute: false },
       navDrawerOpen: { default: false, attribute: false },
+      gatewayStatus: { default: null, attribute: false },
       presented: { default: true, type: Boolean },
       context: { default: undefined, attribute: false },
     },
