@@ -1,17 +1,19 @@
-/**
- * Session listing keeps whole-store materialization, sharing refreshes, and
- * transcript projection work bounded at their owning storage boundaries.
- */
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import * as agentScope from "../agents/agent-scope.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import * as sessionEntryStatus from "../config/sessions/session-accessor.sqlite-status.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import * as transcriptWorker from "../config/sessions/session-transcript-worker-runtime.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import { withOpenClawAgentDatabaseWrite } from "../state/openclaw-agent-db-write.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+/**
+ * Session listing keeps whole-store materialization, sharing refreshes, and
+ * transcript projection work bounded at their owning storage boundaries.
+ */
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { observeSessionRowBackfill } from "./session-row-backfill.test-support.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
@@ -89,17 +91,17 @@ test("sessions.list retains stored titles and transcript previews beyond the dat
     const sessionId = `session-${agentId}`;
     const sessionKey = `agent:${agentId}:main`;
     const storePath = storeTemplate.replace("{agentId}", agentId);
-    await writeSessionStore({
-      agentId,
-      entries: {
-        [sessionKey]: sessionStoreEntry(sessionId, {
-          updatedAt: 1_781_000_000_000 - index,
-          displayName: `Title ${agentId}`,
-        }),
-      },
-      storePath,
+    const entry = sessionStoreEntry(sessionId, {
+      updatedAt: 1_781_000_000_000 - index,
+      displayName: `Title ${agentId}`,
     });
-    await sessionAccessor.replaceTranscriptEvents({ agentId, sessionId, sessionKey, storePath }, [
+    if (index === 0) {
+      // Publish fixture config once; the remaining stores only need pristine row seeding.
+      await writeSessionStore({ agentId, entries: { [sessionKey]: entry }, storePath });
+    } else {
+      sessionAccessor.replaceSessionEntrySync({ agentId, sessionKey, storePath }, entry);
+    }
+    await replaceTranscriptEvents({ agentId, sessionId, sessionKey, storePath }, [
       { type: "session", version: 3, id: sessionId, cwd: "/tmp" },
       {
         type: "message",
@@ -121,19 +123,25 @@ test("sessions.list retains stored titles and transcript previews beyond the dat
   const cfg = { session: { store: storeTemplate }, agents: testState.agentsConfig };
   const backfilled = observeSessionRowBackfill(agentIds.map((agentId) => `agent:${agentId}:main`));
   const projection = await createSessionRowProjection({ cfg });
+  const context = {
+    getRuntimeConfig: () => cfg,
+    ...bindSessionRowProjection({}, () => projection),
+  };
   try {
+    const initial = await directSessionReq<SessionsListResult>(
+      "sessions.list",
+      { includeDerivedTitles: true, includeLastMessage: true, limit: agentIds.length },
+      { context },
+    );
+    expect(initial.ok).toBe(true);
+    expect(initial.payload?.sessions).toHaveLength(agentIds.length);
     await backfilled;
     await projection.ensureMaterialized();
     for (const limit of [undefined, 100]) {
       const result = await directSessionReq<SessionsListResult>(
         "sessions.list",
         { includeDerivedTitles: true, includeLastMessage: true, limit },
-        {
-          context: {
-            getRuntimeConfig: () => cfg,
-            ...bindSessionRowProjection({}, () => projection),
-          },
-        },
+        { context },
       );
 
       expect(result.ok).toBe(true);
@@ -161,7 +169,17 @@ test("sessions.list projects out prompt snapshots without changing full entry re
   await createSessionStoreDir();
   await writeSessionStore({
     entries: {
-      main: sessionStoreEntry("sess-main"),
+      main: sessionStoreEntry("sess-main", {
+        skillsSnapshot: { prompt: "large skill prompt", skills: [{ name: "test" }] },
+        systemPromptReport: {
+          source: "run",
+          generatedAt: Date.now(),
+          systemPrompt: { chars: 100, projectContextChars: 40, nonProjectContextChars: 60 },
+          injectedWorkspaceFiles: [],
+          skills: { promptChars: 0, entries: [] },
+          tools: { listChars: 0, schemaChars: 0, entries: [] },
+        },
+      }),
     },
   });
   const storePath = testState.sessionStorePath!;
@@ -170,25 +188,9 @@ test("sessions.list projects out prompt snapshots without changing full entry re
     agentId: target.agentId ?? "main",
     path: target.path,
   });
-  const stored = database.db
-    .prepare("SELECT session_key, entry_json FROM session_nodes LIMIT 1")
-    .get() as { session_key: string; entry_json: string };
-  const storedEntry = JSON.parse(stored.entry_json) as SessionEntry;
-  await sessionAccessor.replaceSessionEntry(
-    { agentId: "main", sessionKey: stored.session_key, storePath },
-    {
-      ...storedEntry,
-      skillsSnapshot: { prompt: "large skill prompt", skills: [{ name: "test" }] },
-      systemPromptReport: {
-        source: "run",
-        generatedAt: Date.now(),
-        systemPrompt: { chars: 100, projectContextChars: 40, nonProjectContextChars: 60 },
-        injectedWorkspaceFiles: [],
-        skills: { promptChars: 0, entries: [] },
-        tools: { listChars: 0, schemaChars: 0, entries: [] },
-      },
-    },
-  );
+  const stored = database.db.prepare("SELECT session_key FROM session_nodes LIMIT 1").get() as {
+    session_key: string;
+  };
   const fullEntries = sessionAccessor.listSessionEntriesReadOnly({ agentId: "main", storePath });
   expect(fullEntries).toHaveLength(1);
   expect(fullEntries[0]?.entry.skillsSnapshot).toBeDefined();
@@ -231,12 +233,22 @@ test("sessions.list projects out prompt snapshots without changing full entry re
     expect(resident?.storedEntry?.systemPromptReport).toBeUndefined();
 
     // Warm readers tolerate malformed raw edits; new readers must refuse them during admission.
-    database.db
-      .prepare(
-        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
-      )
-      .run("agent:main:zz-malformed", "malformed", "{", Date.now());
-    reads = trackSqliteStatementExecutions(database.db, ["sessionStore"], () => "sessionStore");
+    await withOpenClawAgentDatabaseWrite(
+      { agentId: database.agentId, path: database.path },
+      (current) => {
+        current.db
+          .prepare(
+            "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+          )
+          .run("agent:main:zz-malformed", "malformed", "{", Date.now());
+      },
+      requireNativeSqliteDatabase(database.db),
+    );
+    reads = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["sessionStore"],
+      () => "sessionStore",
+    );
     decode.mockClear();
 
     const result = await directSessionReq<SessionsListResult>("sessions.list", LIST_PARAMS, {

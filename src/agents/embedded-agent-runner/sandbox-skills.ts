@@ -1,6 +1,4 @@
 /**
- * Sandbox skill runtime input selection.
- *
  * Sandboxed runs must build prompt-facing skill entries from readable in-sandbox
  * copies instead of reusing host-path snapshots.
  */
@@ -224,12 +222,7 @@ export function remapSkillReferencePaths(
       );
     }
   }
-  const visited = new Set<string>();
-  for (const item of items) {
-    if (visited.has(item.skillFile)) {
-      continue;
-    }
-    visited.add(item.skillFile);
+  for (const item of indexFirstByKey(items, (entry) => entry.skillFile).values()) {
     const matches = items.filter((candidate) => candidate.skillFile === item.skillFile);
     const physicalTarget =
       matches.find((candidate) => candidate.sourceReadPath === undefined) ??

@@ -3,7 +3,8 @@ import type { DiscordCommandDeployHashStore } from "../command-deploy-store.js";
 import { DiscordCommandDeployer } from "./command-deploy.js";
 import type { DiscordCommand } from "./commands.js";
 import { ComponentRegistry } from "./component-registry.js";
-import { BaseMessageInteractiveComponent, type Modal } from "./components.js";
+import { BaseMessageInteractiveComponent } from "./components.base.js";
+import type { Modal } from "./components.modal.js";
 import { DiscordEntityCache } from "./entity-cache.js";
 import { DiscordEventQueue, type DiscordEventQueueOptions } from "./event-queue.js";
 import { dispatchInteraction } from "./interaction-dispatch.js";
@@ -11,12 +12,9 @@ import type { GatewayPluginContract, VoicePluginContract } from "./plugin-contra
 import { RequestClient, type RequestClientOptions } from "./rest.js";
 import type { Guild, GuildMember, User } from "./structures.js";
 
-export abstract class Plugin {
-  abstract readonly id: string;
+export type RegisteredPlugin = (GatewayPluginContract | VoicePluginContract) & {
   registerClient?(client: Client): Promise<void> | void;
-}
-
-export type RegisteredPlugin = Plugin & (GatewayPluginContract | VoicePluginContract);
+};
 
 type AnyListener = {
   type: string;
@@ -66,10 +64,7 @@ export class Client {
     this.eventQueue = this.options.eventQueue
       ? new DiscordEventQueue(this.options.eventQueue)
       : undefined;
-    this.entityCache = new DiscordEntityCache({
-      client: this,
-      rest: () => this.rest,
-    });
+    this.entityCache = new DiscordEntityCache(this);
     this.commandDeployer = new DiscordCommandDeployer({
       clientId: this.options.clientId,
       commands: this.commands,
@@ -93,12 +88,6 @@ export class Client {
   getPlugin(id: string): RegisteredPlugin | undefined;
   getPlugin(id: string): RegisteredPlugin | undefined {
     return this.plugins.find((plugin) => plugin.id === id);
-  }
-
-  getRuntimeMetrics() {
-    return {
-      eventQueue: this.eventQueue?.getMetrics(),
-    };
   }
 
   async fetchUser(id: string): Promise<User> {

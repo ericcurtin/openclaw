@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import { z } from "zod";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
+import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
 import { createManagedHandoffBootIdentityReader } from "./update-managed-service-handoff-boot.js";
 import { managedHandoffBootSchema } from "./update-managed-service-handoff-schema.js";
 
@@ -35,7 +36,10 @@ export function readGatewayLockProcessNamespace(): ProcessNamespace | null {
       host: os.hostname(),
       ...boot,
       ...(boot.platform === "linux"
-        ? { pidNsInode: fs.statSync("/proc/self/ns/pid", { bigint: true }).ino.toString() }
+        ? {
+            // PRoot can read this magic link but cannot follow its synthetic target with stat.
+            pidNsInode: fs.readlinkSync("/proc/self/ns/pid").match(/^pid:\[(\d+)\]$/u)?.[1],
+          }
         : {}),
     });
     processNamespace = { platform: value.platform, value };
@@ -46,10 +50,41 @@ export function readGatewayLockProcessNamespace(): ProcessNamespace | null {
   }
 }
 
+type GatewayLockHolder = Partial<Pick<LockPayload, "pid" | "processNamespace">> & {
+  host?: string;
+  heartbeatAt?: number;
+};
+
+/** Diagnostic facts never grant ownership; callers still classify the recorded holder. */
+export function describeGatewayLockHolder(
+  holder: GatewayLockHolder,
+  lockPath?: string,
+  localState?: "live" | "unknown",
+) {
+  const namespace = GatewayProcessNamespaceSchema.safeParse(holder.processNamespace).data;
+  let heartbeatAt = holder.heartbeatAt;
+  if (lockPath) {
+    try {
+      heartbeatAt = fs.statSync(lockPath).mtimeMs;
+    } catch {
+      // Preserve the refusal when the heartbeat cannot be inspected.
+    }
+  }
+  const ageMs = heartbeatAt === undefined ? undefined : Date.now() - heartbeatAt;
+  const location = `${namespace?.host ?? holder.host ?? "unknown host"}${namespace?.platform === "linux" ? `/pid-ns ${namespace.pidNsInode}` : ""}`;
+  const action =
+    localState === "live"
+      ? `The holder ${holder.pid} is alive on this host, stop it first`
+      : localState === "unknown"
+        ? "Stop the holder before retrying"
+        : `wait ${Math.max(1, Math.floor((GATEWAY_OWNER_HEARTBEAT_STALE_MS - (ageMs ?? 0)) / 1000) + 1)} s and retry`;
+  return `holder ${holder.pid ?? "unknown"} at ${location}, last renewed ${ageMs === undefined ? "at an unknown time" : `${Math.max(0, Math.floor(ageMs / 1000))} s ago`}. ${action}.`;
+}
+
 export class GatewayLockNamespaceError extends Error {
-  constructor() {
+  constructor(holder: GatewayLockHolder, lockPath?: string) {
     super(
-      "cannot verify Gateway ownership from this process (different PID namespace); the owner heartbeat is fresh — run this command inside the Gateway container or with a shared PID namespace. If the previous Gateway stopped, wait up to 90 seconds after its last heartbeat, then retry",
+      `cannot verify Gateway ownership from this process (different PID namespace); the owner heartbeat is fresh — run this command inside the Gateway container or with a shared PID namespace. If the previous Gateway stopped, wait up to 90 seconds after its last heartbeat. ${describeGatewayLockHolder(holder, lockPath)}`,
     );
     this.name = "GatewayLockNamespaceError";
   }
@@ -117,6 +152,7 @@ const LockPayloadSchema = z.object({
   /** Present when Gateway cron writes use the dynamic-default ownership projection. */
   cronOwnerProjection: z.literal("dynamic-default-v1").optional(),
   createdAt: z.string(),
+  startupPhase: z.literal("starting").optional(),
   configPath: z.string(),
   port: z.number().int().min(1).max(65_535).optional(),
   role: z
@@ -124,12 +160,26 @@ const LockPayloadSchema = z.object({
     .optional(),
   stateDir: z.string().optional(),
   startTime: z.number().optional(),
+  parentPid: z.number().int().positive().optional(),
+  parentStartTime: z.number().optional(),
   // Null records an unavailable identity; absent fields retain legacy PID recovery.
   processNamespace: GatewayProcessNamespaceSchema.nullable().optional(),
 });
 
 export type LockPayload = z.infer<typeof LockPayloadSchema>;
 export type GatewayLockRole = NonNullable<LockPayload["role"]>;
+
+/** Parent loss cancels maintenance; peers still wait for its native process to exit. */
+export function isGatewayMaintenanceParentStale(owner: LockPayload | null): boolean {
+  return (
+    owner?.role === "sqlite-maintenance" &&
+    owner.parentPid !== undefined &&
+    ((owner.pid === process.pid && process.ppid !== owner.parentPid) ||
+      isLockOwnerDefinitelyStale({
+        payload: { pid: owner.parentPid, starttime: owner.parentStartTime },
+      }))
+  );
+}
 
 export function parseGatewayLockPayload(raw: string): LockPayload | null {
   return safeParseJsonWithSchema(LockPayloadSchema, raw);

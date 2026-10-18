@@ -1,9 +1,9 @@
+import { lstatSync } from "node:fs";
 import fs from "node:fs/promises";
 import { root as openFsSafeRoot } from "../../infra/fs-safe.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { createStagedInputPathMatcher } from "../../media/staged-inputs.js";
 import { getOrCreatePromise } from "../../shared/lazy-promise.js";
-import { isManagedSandboxSkillsPath } from "../../shared/sandbox-workspace-paths.js";
 import { MAX_WORKSPACE_INVENTORY_ENTRIES } from "./workspace-inventory-limits.js";
 import {
   hasPathAncestor,
@@ -16,9 +16,12 @@ import type {
   WorkspaceManifestValueOutputs,
 } from "./workspace-manifest-computation.js";
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
-import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
 import {
-  directoryContainsOnlyDerivedWorkspaceEntries,
+  isDerivedWorkspacePath,
+  isRuntimeOwnedWorkspacePath,
+} from "./workspace-path-exclusions.js";
+import {
+  directoryContainsOnlyWorkspaceEntries,
   localPath,
   localWorkspaceNode,
 } from "./workspace-reconcile-fs.js";
@@ -51,8 +54,8 @@ async function localWorkspaceDescendantPaths(
       if (pathBytes > MAX_RECONCILIATION_PATH_BYTES) {
         throw new Error("Gateway workspace manifest paths exceed their byte limit");
       }
-      if (isManagedSandboxSkillsPath(childPath)) {
-        // Runtime projections are excluded edits, not disposable cache children.
+      if (isRuntimeOwnedWorkspacePath(childPath)) {
+        // Runtime-owned paths are excluded edits, not disposable cache children.
         // Surface their presence as a conflict before replacing an ancestor.
         if (hasPathAncestor(nonDirectoryReplacements, childPath)) {
           paths.push(childPath);
@@ -123,18 +126,19 @@ export async function preflightWorkspaceApplyImpl(
       continue;
     }
     const currentNode = currentNodes.get(entryPath);
-    const deletionAlreadySatisfied =
-      currentNode === undefined &&
-      !(await fs.lstat(localPath(params.root, entryPath)).catch((error: unknown) => {
+    if (currentNode === undefined) {
+      // This preflight runs in a Git worker. Avoid a threadpool round trip for
+      // every already-absent deletion without caching facts across passes.
+      try {
+        if (!lstatSync(localPath(params.root, entryPath), { throwIfNoEntry: false })) {
+          continue;
+        }
+      } catch (error) {
         if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ENOTDIR")) {
-          return undefined;
+          continue;
         }
         throw error;
-      }));
-    if (deletionAlreadySatisfied) {
-      // A deletion can already be satisfied because local also removed an
-      // unchanged ancestor. Do not turn that convergence into a conflict.
-      continue;
+      }
     }
     let localAncestorConflict = false;
     let replacedBaseAncestor = false;
@@ -177,13 +181,10 @@ export async function preflightWorkspaceApplyImpl(
       local = await localNode(entryPath);
       if (
         local?.type === "directory" &&
+        !isRuntimeOwnedWorkspacePath(entryPath) &&
         (!baseNodes.has(entryPath) || !currentNodes.has(entryPath)) &&
         currentNodes.get(entryPath)?.type !== "directory" &&
-        (await directoryContainsOnlyDerivedWorkspaceEntries(
-          params.root,
-          entryPath,
-          isRetainedInput,
-        ))
+        (await directoryContainsOnlyWorkspaceEntries(params.root, entryPath, isRetainedInput))
       ) {
         local = undefined;
       }

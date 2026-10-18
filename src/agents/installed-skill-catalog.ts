@@ -1,6 +1,7 @@
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
 import { readCodeModeSkill, type CodeModeSkill } from "./code-mode-skills.js";
+import type { SkillInstructionResult } from "./skill-instruction-result.js";
 import { getTextLexicalIndex } from "./tool-search-index.js";
 import { scoreLexical, tokenizeDocument } from "./tool-search-ranking.js";
 import { ToolInputError } from "./tools/common.js";
@@ -249,11 +250,13 @@ export async function readInstalledSkill(
   skills: readonly InstalledSkill[],
   name: string,
   signal?: AbortSignal,
-): Promise<string> {
+): Promise<SkillInstructionResult> {
   signal?.throwIfAborted();
   const skill = skills.find((entry) => entry.name === name);
   if (!skill) {
-    throw new ToolInputError(`Unknown installed skill ${JSON.stringify(name)}.`);
+    throw new ToolInputError(
+      `Skill ${JSON.stringify(name)} is not available to this agent. Search the available skills instead.`,
+    );
   }
   skill.assertCurrent?.();
   const content =
@@ -272,5 +275,10 @@ export async function readInstalledSkill(
       `Skill ${JSON.stringify(name)} exceeds the ${MAX_SKILL_INSTRUCTION_BYTES}-byte instruction limit.`,
     );
   }
-  return content;
+  return {
+    name: skill.name,
+    location: skill.location,
+    ...(skill.locationNote ? { locationNote: skill.locationNote } : {}),
+    content,
+  };
 }

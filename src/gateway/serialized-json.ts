@@ -1,6 +1,40 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 
 const serializedArrays = new WeakMap<readonly unknown[], Uint8Array>();
+const frameSegments = new WeakMap<Uint8Array, readonly Uint8Array[]>();
+
+/** Retain shared byte identities across per-recipient frame envelopes. */
+export function concatGatewayFrame(chunks: readonly Uint8Array[]): Buffer {
+  const frame = Buffer.concat(chunks);
+  frameSegments.set(frame, chunks);
+  return frame;
+}
+
+export function gatewayFrameSegments(frame: Uint8Array): readonly Uint8Array[] | undefined {
+  return frameSegments.get(frame);
+}
+
+/** Own the optional payload field, including JSON omission, before socket fanout. */
+export class SerializedJsonPayload {
+  readonly bytes: Uint8Array;
+
+  constructor(payload: unknown) {
+    const frame = serializeGatewayFrame({ type: "res", payload });
+    const bytes = typeof frame === "string" ? Buffer.from(frame) : frame;
+    this.bytes = bytes.subarray('{"type":"res"'.length, -1);
+  }
+
+  toJSON(): unknown {
+    if (this.bytes.byteLength === 0) {
+      return undefined;
+    }
+    return JSON.parse(
+      Buffer.from(this.bytes.buffer, this.bytes.byteOffset, this.bytes.byteLength)
+        .subarray(',"payload":'.length)
+        .toString("utf8"),
+    );
+  }
+}
 
 /** Register an immutable RPC array with its owner's already encoded row bytes. */
 export function registerSerializedJsonArray<T>(
@@ -46,6 +80,19 @@ function fieldJson(key: string, value: unknown): string {
 
 export function serializeGatewayFrame(value: unknown): string | Buffer {
   const frame = asOptionalRecord(value);
+  const sharedPayload = frame?.type === "res" ? frame.payload : undefined;
+  if (
+    frame &&
+    sharedPayload instanceof SerializedJsonPayload &&
+    typeof frame.toJSON !== "function"
+  ) {
+    const envelope = Object.fromEntries(Object.entries(frame).filter(([key]) => key !== "payload"));
+    return concatGatewayFrame([
+      Buffer.from(JSON.stringify(envelope).slice(0, -1)),
+      sharedPayload.bytes,
+      Buffer.from("}"),
+    ]);
+  }
   const payload = frame?.type === "res" ? asOptionalRecord(frame.payload) : undefined;
   // Subscription admission nests the same list response one level below payload.
   const list = payload && asOptionalRecord(Object.getOwnPropertyDescriptor(payload, "list")?.value);
@@ -90,5 +137,5 @@ export function serializeGatewayFrame(value: unknown): string | Buffer {
     chunks.push(Buffer.from("}"));
   };
   appendObject(frame);
-  return Buffer.concat(chunks);
+  return concatGatewayFrame(chunks);
 }

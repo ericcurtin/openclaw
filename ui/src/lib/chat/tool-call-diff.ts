@@ -1,8 +1,6 @@
 import { asNullableObjectRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 
 /**
- * Inline diff data for tool-call rendering.
- *
  * Sources, in preference order:
  * 1. The edit tool's precomputed display diff (`details.diff`, numbered lines).
  * 2. A locally computed line diff from `oldText`/`newText`-style args when a
@@ -99,12 +97,9 @@ export function parseDiffDetailsString(diff: string): LineDiffResult | null {
       return null;
     }
     const [, sign, lineNo, text] = match;
-    if (!sign || !lineNo) {
-      return null;
-    }
     lines.push({
       kind: sign === "+" ? "add" : sign === "-" ? "del" : "ctx",
-      lineNo: Number.parseInt(lineNo, 10),
+      lineNo: Number.parseInt(lineNo!, 10),
       text: text ?? "",
     });
     if (lines.length > MAX_DIFF_RENDER_LINES) {
@@ -148,9 +143,8 @@ function compactLineDiff(lines: DiffLine[], inputTruncated: boolean): DiffLine[]
       : [...lines.slice(0, MAX_DIFF_RENDER_LINES), { kind: "skip", text: "" }];
   }
   const keep = new Uint8Array(lines.length);
-  for (let index = 0; index < lines.length; index++) {
-    const line = lines[index];
-    if (!line || (line.kind !== "add" && line.kind !== "del")) {
+  for (const [index, line] of lines.entries()) {
+    if (line.kind !== "add" && line.kind !== "del") {
       continue;
     }
     const start = Math.max(0, index - 3);
@@ -160,7 +154,7 @@ function compactLineDiff(lines: DiffLine[], inputTruncated: boolean): DiffLine[]
   const preview: DiffLine[] = [];
   let gap = false;
   let clipped = inputTruncated;
-  for (let index = 0; index < lines.length; index++) {
+  for (const [index, line] of lines.entries()) {
     if (keep[index] === 0) {
       gap = true;
       clipped = true;
@@ -174,10 +168,7 @@ function compactLineDiff(lines: DiffLine[], inputTruncated: boolean): DiffLine[]
       clipped = true;
       break;
     }
-    const line = lines[index];
-    if (line) {
-      preview.push(line);
-    }
+    preview.push(line);
   }
   if (clipped && preview.at(-1)?.kind !== "skip") {
     preview.push({ kind: "skip", text: "" });
@@ -185,10 +176,45 @@ function compactLineDiff(lines: DiffLine[], inputTruncated: boolean): DiffLine[]
   return preview;
 }
 
-/**
- * Compute a line diff between two snippets (no file line numbers available).
- * Bounded LCS comparison retains deletion-first alignment for equal-length paths.
- */
+/** Callers bound input sizes; both line and inline diffs use deletion-first LCS ties. */
+export function visitTextDiff(
+  oldLines: readonly string[],
+  newLines: readonly string[],
+  visit: (kind: "ctx" | "del" | "add", text: string) => void,
+): void {
+  const stride = newLines.length + 1;
+  // The extra row/column are zero sentinels; bounded LCS lengths fit in Uint16.
+  const lcs = new Uint16Array((oldLines.length + 1) * stride);
+  for (let i = oldLines.length - 1; i >= 0; i--) {
+    for (let j = newLines.length - 1; j >= 0; j--) {
+      const offset = i * stride + j;
+      lcs[offset] =
+        oldLines[i] === newLines[j]
+          ? lcs[offset + stride + 1]! + 1
+          : Math.max(lcs[offset + stride]!, lcs[offset + 1]!);
+    }
+  }
+  for (let i = 0, j = 0; i < oldLines.length || j < newLines.length;) {
+    const oldLine = oldLines[i];
+    const newLine = newLines[j];
+    if (oldLine !== undefined && oldLine === newLine) {
+      visit("ctx", oldLine);
+      i++;
+      j++;
+    } else if (
+      oldLine !== undefined &&
+      (newLine === undefined || lcs[(i + 1) * stride + j]! >= lcs[i * stride + j + 1]!)
+    ) {
+      visit("del", oldLine);
+      i++;
+    } else if (newLine !== undefined) {
+      visit("add", newLine);
+      j++;
+    }
+  }
+}
+
+/** Compute a bounded line diff between snippets, without file line numbers. */
 export function computeLineDiff(oldText: string, newText: string): LineDiffResult {
   const allOldLines = splitDiffLines(oldText);
   const allNewLines = splitDiffLines(newText);
@@ -199,7 +225,7 @@ export function computeLineDiff(oldText: string, newText: string): LineDiffResul
     allOldLines.every((line, index) => line === allNewLines[index]);
   const comparisonTruncated = inputTruncated && !inputsEqual;
   const lines: DiffLine[] = [];
-  // Reconstruction consumes equal leading lines before consulting the LCS table.
+  // Exclude equal leading lines from the LCS allocation.
   let prefix = 0;
   while (
     prefix < Math.min(allOldLines.length, allNewLines.length, MAX_DIFF_INPUT_LINES) &&
@@ -208,45 +234,17 @@ export function computeLineDiff(oldText: string, newText: string): LineDiffResul
     lines.push({ kind: "ctx", text: allOldLines[prefix]! });
     prefix++;
   }
-  const oldLines = allOldLines.slice(prefix, MAX_DIFF_INPUT_LINES);
-  const newLines = allNewLines.slice(prefix, MAX_DIFF_INPUT_LINES);
-  const stride = newLines.length + 1;
-  // The extra row/column are zero sentinels; bounded LCS lengths fit in Uint16.
-  const lcs = new Uint16Array((oldLines.length + 1) * stride);
-  for (let i = oldLines.length - 1; i >= 0; i--) {
-    for (let j = newLines.length - 1; j >= 0; j--) {
-      const offset = i * stride + j;
-      lcs[offset] =
-        oldLines[i] === newLines[j]
-          ? (lcs[offset + stride + 1] ?? 0) + 1
-          : Math.max(lcs[offset + stride] ?? 0, lcs[offset + 1] ?? 0);
-    }
-  }
-  for (let i = 0, j = 0; i < oldLines.length || j < newLines.length;) {
-    const oldLine = oldLines[i];
-    const newLine = newLines[j];
-    if (oldLine !== undefined && oldLine === newLine) {
-      lines.push({ kind: "ctx", text: oldLine });
-      i++;
-      j++;
-    } else if (
-      oldLine !== undefined &&
-      (newLine === undefined || (lcs[(i + 1) * stride + j] ?? 0) >= (lcs[i * stride + j + 1] ?? 0))
-    ) {
-      lines.push({ kind: "del", text: oldLine });
-      i++;
-    } else if (newLine !== undefined) {
-      lines.push({ kind: "add", text: newLine });
-      j++;
-    }
-  }
+  visitTextDiff(
+    allOldLines.slice(prefix, MAX_DIFF_INPUT_LINES),
+    allNewLines.slice(prefix, MAX_DIFF_INPUT_LINES),
+    (kind, text) => lines.push({ kind, text }),
+  );
   const preview = compactLineDiff(lines, comparisonTruncated);
   return comparisonTruncated
     ? { kind: "truncated", lines: preview }
     : { kind: "complete", lines: preview, stat: diffStat(lines) };
 }
 
-/** All-added preview for freshly written files, numbered from line 1. */
 export function buildWriteDiffLines(content: string): DiffLine[] {
   const sourceLines = splitDiffLines(content);
   const lines: DiffLine[] = [];

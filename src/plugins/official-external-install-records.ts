@@ -354,7 +354,7 @@ export function resolveTrustedSourceLinkedOfficialNpmInstall(params: {
 export function resolveTrustedSourceLinkedOfficialClawHubInstall(params: {
   pluginId: string;
   record: PluginInstallRecord;
-}): { clawhubSpec?: string; npmSpec?: string } | undefined {
+}): { clawhubSpec?: string; npmSpec?: string; expectedIntegrity?: string } | undefined {
   if (params.record.source !== "clawhub") {
     return undefined;
   }
@@ -397,5 +397,8 @@ export function resolveTrustedSourceLinkedOfficialClawHubInstall(params: {
   return {
     ...(officialClawHubSpec ? { clawhubSpec: officialClawHubSpec } : {}),
     ...(officialNpmSpec ? { npmSpec: officialNpmSpec } : {}),
+    ...(officialNpmSpec && install?.expectedIntegrity
+      ? { expectedIntegrity: install.expectedIntegrity }
+      : {}),
   };
 }
