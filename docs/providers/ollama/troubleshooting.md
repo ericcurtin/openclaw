@@ -263,6 +263,14 @@ sidebarTitle: "Troubleshooting"
 
   </Accordion>
 
+  <Accordion title="Prompt is re-evaluated after sub-agent or announce turns">
+    If prompt evaluation time jumps whenever the main turn alternates with a
+    sub-agent or announce turn, try [llmman](/providers/llmman). It keeps recent
+    prompt states in RAM, so each turn type resumes from its own cached prefix
+    after the first pass.
+
+  </Accordion>
+
   <Accordion title="Memory embedding rebuild fails">
     If `openclaw memory index --force` fails against Ollama (for example with
     `bge-m3`), try [llmman](/providers/llmman#advanced-configuration) as the
