@@ -110,17 +110,17 @@ export function releasePipe(socket: Socket): void {
     held.releasing = true;
   });
   restoreReader(socket, held);
-  // Replay the caller's latest flow request over Node's resume, and wake async
-  // iterators waiting for another notification.
+  // Replay the caller's latest flow request over Node's resume, then wake async
+  // iterators. Replay first so a readable listener's own request wins.
   process.nextTick(() => {
     restoreFlow(socket, held);
     if (socket.destroyed) {
       return;
     }
-    socket.emit("readable");
     if (held.flow) {
       socket[held.flow]();
     }
+    socket.emit("readable");
   });
 }
 

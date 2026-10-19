@@ -24,4 +24,15 @@ describe("spawn broker pipe release", () => {
       socket.destroy();
     },
   );
+
+  it("keeps a resume a readable listener makes over a pause made while held", async () => {
+    const socket = new Socket();
+    holdPipe(socket);
+    socket.pause();
+    socket.once("readable", () => socket.resume());
+    releasePipe(socket);
+    await yieldToEventLoop();
+    expect(socket.isPaused()).toBe(false);
+    socket.destroy();
+  });
 });
