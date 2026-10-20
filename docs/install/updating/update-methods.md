@@ -322,11 +322,12 @@ under the Homebrew prefix continue to use npm.
 
 ## System-package and image-based installs
 
-When your operating system owns the OpenClaw package, `openclaw update` leaves it
-unchanged and nothing OpenClaw-managed runs Doctor. This covers distro packages
-(pacman, FreeBSD pkg) and image-based systems (bootc, rpm-ostree). After the system
-replaces the package, run `openclaw doctor --fix`. Before staging the new package or
-image, [create a verified backup](/install/updating/rollback-and-recovery#before-updating-create-a-verified-backup).
+When your operating system owns the OpenClaw package, nothing OpenClaw-managed runs
+Doctor. `openclaw update` skips only installs it verifies as owned by pacman or
+FreeBSD pkg. It does not detect bootc or rpm-ostree images, so update those through
+the image and do not run `openclaw update` on them. After the system replaces the
+package, run `openclaw doctor --fix`. Before staging the new package or image,
+[create a verified backup](/install/updating/rollback-and-recovery#before-updating-create-a-verified-backup).
 
 An image-based system swaps the package and reboots, so the Gateway service starts
 with the new release already in place; there is no window to stop it and run Doctor
@@ -348,8 +349,12 @@ systemctl --user status openclaw-gateway.service
 openclaw doctor --fix --non-interactive
 ```
 
-For a system service, run `systemctl status` with `sudo` on its unit. Doctor backs up
-the database beside it before migrating, then restarts the managed Gateway.
+Doctor backs up the database beside it before migrating, then restarts the managed
+Gateway. For a system service, run `systemctl status` with `sudo` on its unit, and run
+Doctor as the service account with the service's profile and `OPENCLAW_STATE_DIR` or
+`OPENCLAW_CONFIG_PATH`. From another account Doctor refuses the mismatched selection or
+inspects unrelated state. If Doctor does not restart the unit, restart it with
+`sudo systemctl restart`.
 
 Rolling the image back (`bootc rollback`, `rpm-ostree rollback`) swaps the package but
 not migrated state. After a migration, restore a verified backup with its matching
