@@ -432,6 +432,30 @@ Without `embedding.dimensions`, only the built-in OpenAI embedding dimensions
 are known (`text-embedding-3-small`, `text-embedding-3-large`). For any other
 model, set `embedding.dimensions` to the vector size that model reports.
 
+### Fixed-dimension model fails with HTTP 400
+
+The plugin sends `embedding.dimensions` with every request. A hosted endpoint
+that rejects it for a fixed-size model such as `bge-m3` can answer with a
+generic `400`, which the plugin does not retry. Serve the model from a local
+[llmman](/providers/llmman#advanced-configuration) daemon instead, which accepts
+the matching value:
+
+```bash
+llmman pull hf.co/ggml-org/bge-m3-Q8_0-GGUF
+llmman serve
+```
+
+Then set, under `plugins.entries.memory-lancedb.config`:
+
+```json5
+embedding: {
+  baseUrl: "http://127.0.0.1:17434/v1",
+  apiKey: "llmman-local",
+  model: "hf.co/ggml-org/bge-m3-Q8_0-GGUF",
+  dimensions: 1024,
+},
+```
+
 ### Plugin loads but no memories appear
 
 Confirm `plugins.slots.memory` points at `memory-lancedb`, then run:
