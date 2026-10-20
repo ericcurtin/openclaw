@@ -84,6 +84,14 @@ describe("incomplete-turn retry classification", () => {
     { provider: "ollama", modelId: "minimax-m2.7:cloud", output: 6, expected: EMPTY_RETRY },
     { provider: "ollama", modelId: "glm-5.1:cloud", output: 0, expected: null },
     {
+      provider: "llmman",
+      modelId: "qwen3.5:0.8b",
+      modelApi: "ollama",
+      output: 6,
+      expected: EMPTY_RETRY,
+    },
+    { provider: "llmman", modelId: "qwen3.5:0.8b", modelApi: "ollama", output: 0, expected: null },
+    {
       provider: "openai",
       modelId: "gpt-5.5",
       modelApi: "openai-chatgpt-responses",

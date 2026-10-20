@@ -480,7 +480,7 @@ function resolveEmptyResponseRetryInstruction(
 
   if (
     assistant?.stopReason === "stop" &&
-    isOllamaIncompleteTurnProvider(params.provider) &&
+    isOllamaIncompleteTurnProvider(params) &&
     !hasPositiveOutputTokenUsage(assistant)
   ) {
     return null;
