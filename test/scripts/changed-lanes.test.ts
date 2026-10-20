@@ -612,6 +612,15 @@ describe("scripts/changed-lanes", () => {
     }
   });
 
+  it("tells a single-branch clone how to fetch a missing base ref", () => {
+    const dir = createGitRepo("openclaw-changed-missing-base-");
+
+    expect(() => listChangedPathsFromGit({ base: "origin/main", cwd: dir })).toThrow(
+      "Base ref origin/main is not in this checkout (shallow or single-branch clone?). " +
+        "Fetch it, for example: git fetch origin main:refs/remotes/origin/main",
+    );
+  });
+
   it("compares a pending merge index with the explicit staged base through the CLI", () => {
     const dir = createGitRepo("openclaw-changed-staged-base-");
     const fork = git(dir, ["rev-parse", "HEAD"]);

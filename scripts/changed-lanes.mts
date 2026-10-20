@@ -4,7 +4,7 @@ import { stableStringify } from "../packages/normalization-core/src/stable-strin
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
 import { getChangedPathFacts, normalizeChangedPath } from "./lib/changed-path-facts.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
-import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
+import { resolveCommit, resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import { isReleaseChangelogPath } from "./lib/release-changelog.mjs";
 import { isChangedTsgoCoreTestInput } from "./lib/tsgo-core-test-shards.mts";
@@ -459,7 +459,13 @@ export function listChangedPathsFromGit(params: {
     rangePaths = runGitNameOnlyDiff([`${base}...${head}`], cwd);
   } catch (error) {
     if (!isGitNoMergeBaseError(error)) {
-      throw error;
+      throw resolveCommit({ ref: base, cwd })
+        ? error
+        : new Error(
+            `Base ref ${base} is not in this checkout (shallow or single-branch clone?). ` +
+              "Fetch it, for example: git fetch origin main:refs/remotes/origin/main",
+            { cause: error },
+          );
     }
     noMergeBase = true;
     rangePaths = runGitNameOnlyDiff([`${base}..${head}`], cwd);

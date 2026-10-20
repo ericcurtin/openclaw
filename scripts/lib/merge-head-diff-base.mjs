@@ -53,10 +53,15 @@ function listCommitParents({ ref, cwd, maxBuffer }) {
 }
 
 /**
- * @param {{ref: string, cwd: string, maxBuffer: number}} params
+ * Resolve a ref to its commit id, or "" when the checkout does not have it.
+ * @param {{ref: string, cwd?: string, maxBuffer?: number}} params
  * @returns {string}
  */
-function resolveCommit({ ref, cwd, maxBuffer }) {
+export function resolveCommit({
+  ref,
+  cwd = process.cwd(),
+  maxBuffer = DEFAULT_GIT_OUTPUT_MAX_BUFFER,
+}) {
   try {
     return execFileSync("git", ["rev-parse", "--verify", `${ref}^{commit}`], {
       cwd,
