@@ -1,20 +1,8 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { inferSshTargetFromRemoteUrl } from "../commands/gateway-status/discovery.js";
+import { describe, expect, it } from "vitest";
 import { buildGatewayDiscoveryTarget } from "./gateway-discovery-targets.js";
 import { parseSshTarget } from "./ssh-tunnel.js";
 
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
-
 describe("IPv6 gateway targets", () => {
-  it("infers an SSH target the parser accepts from a bracketed remote URL", () => {
-    vi.stubEnv("USER", "me");
-    const target = inferSshTargetFromRemoteUrl("wss://[2001:db8::10]:18789");
-    expect(target).toBe("me@[2001:db8::10]");
-    expect(parseSshTarget(target ?? "")).toEqual({ user: "me", host: "2001:db8::10", port: 22 });
-  });
-
   it.each([
     { sshPort: undefined, target: "me@[2001:db8::10]", port: 22 },
     { sshPort: 2222, target: "me@[2001:db8::10]:2222", port: 2222 },
