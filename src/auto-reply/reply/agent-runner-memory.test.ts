@@ -55,11 +55,9 @@ import {
 } from "../../plugins/memory-state.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import {
-  waitForReplyRunSuccessorAdmission,
-  type ReplyOperation,
-} from "../../sessions/session-controller.js";
+import type { ReplyOperation } from "../../sessions/session-controller.js";
 import { getReplyOperationSessionReader } from "../../sessions/session-controller.state.js";
+import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { refreshSessionEntryFromStore } from "./agent-runner-core.js";
 import {
@@ -299,7 +297,7 @@ describe("runMemoryFlushIfNeeded", () => {
       sessionStore: { [sessionKey]: sessionEntry },
       sessionKey,
       storePath: path.join(rootDir, "sessions.json"),
-      isHeartbeat: false,
+
       replyOperation: createReplyOperation(),
       ...overrides,
     });
@@ -319,7 +317,7 @@ describe("runMemoryFlushIfNeeded", () => {
       sessionStore: sessionEntry ? { [sessionKey]: sessionEntry } : undefined,
       sessionKey,
       storePath: path.join(rootDir, "sessions.json"),
-      isHeartbeat: false,
+
       ...createCompactionLifecycle(createReplyOperation()),
       ...overrides,
     });

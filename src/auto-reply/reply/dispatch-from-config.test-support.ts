@@ -1,5 +1,6 @@
 // Shared fixtures for dispatch runtime selection, hooks, and provider handoff.
 import { vi, type Mock } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type {
   AcpSessionResolution,
   SessionAcpMeta,
@@ -90,7 +91,7 @@ export let createReplyOperation: typeof import("../../sessions/session-controlle
 
 export let getSessionControllerOperation: typeof import("../../sessions/session-controller.js").getSessionControllerOperation;
 
-export let isSessionRunActiveForKey: typeof import("../../sessions/session-controller.js").isSessionRunActiveForKey;
+export let isSessionRunActiveForKey: typeof import("../../sessions/session-controller.queries.js").isSessionRunActiveForKey;
 
 let controllerTesting: typeof import("../../sessions/session-controller.test-support.js").testing;
 
@@ -126,6 +127,19 @@ export function setNoAbort() {
   mocks.tryFastAbortFromMessage.mockResolvedValue(noAbortResult);
 }
 
+export function createDispatchGate<T = void>() {
+  const started = createDeferred();
+  const pending = createDeferred<T>();
+  return {
+    ...pending,
+    started: started.promise,
+    wait: () => {
+      started.resolve();
+      return pending.promise;
+    },
+  };
+}
+
 export function resetDeliverySettlementFixture() {
   // Keep the delivery cases on their original non-ACP, Discord-only fixture.
   setDiscordTestRegistry();
@@ -152,36 +166,6 @@ export function resetDeliverySettlementFixture() {
   runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(
     runtimePluginMocks.pluginRegistry,
   );
-}
-
-export function createActiveSlackThread(userId: string) {
-  setNoAbort();
-  const sessionKey = `agent:main:slack:direct:${userId}`;
-  const sessionId = "active-session";
-  sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
-  const activeOperation = createReplyOperation({
-    sessionKey,
-    sessionId,
-    resetTriggered: false,
-    routeThreadId: "500.000",
-  });
-  activeOperation.setPhase("running");
-  return {
-    activeOperation,
-    sessionId,
-    sessionKey,
-    createCtx: (overrides: Partial<MsgContext> = {}) =>
-      buildTestCtx({
-        Provider: "slack",
-        Surface: "slack",
-        OriginatingChannel: "slack",
-        OriginatingTo: `user:${userId}`,
-        ChatType: "direct",
-        SessionKey: sessionKey,
-        MessageThreadId: "501.000",
-        ...overrides,
-      }),
-  };
 }
 
 type MockAcpRuntime = AcpRuntime & {
@@ -456,8 +440,9 @@ export const globalBeforeAll0 = async () => {
   ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
   // The broad facade imports the real manager outside this fixture's mocked dispatch boundary.
   ({ tryDispatchAcpReplyHook } = await import("../../plugin-sdk/acpx.js"));
-  ({ createReplyOperation, getSessionControllerOperation, isSessionRunActiveForKey } =
+  ({ createReplyOperation, getSessionControllerOperation } =
     await import("../../sessions/session-controller.js"));
+  ({ isSessionRunActiveForKey } = await import("../../sessions/session-controller.queries.js"));
   ({ testing: controllerTesting } =
     await import("../../sessions/session-controller.test-support.js"));
   ({ admitReplyTurn, runWithReplyOperationLifecycleAdmission } =

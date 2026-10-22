@@ -1,11 +1,21 @@
 import { createErrorBoundary } from "@solidjs/signals";
-import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, onCleanup, Show, Switch, Match } from "solid-js";
+import { dynamic, type JSX as SolidJSX } from "@solidjs/web";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  Errored,
+  onCleanup,
+  Show,
+  Switch,
+  Match,
+} from "solid-js";
 import {
   ensureCustomElementDefined,
   isOptionalElementDefined,
   createLazyCustomElementRequests,
 } from "../../app/lazy-custom-element.ts";
+import { registerBoardEnglish } from "../../i18n/locales/en-board.ts";
 import {
   BOARD_DOCUMENT_AUTO_MAX_ROWS,
   boardChromeRowPx,
@@ -18,7 +28,7 @@ import {
 } from "../../lib/board/widgets/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { showToast } from "../../lib/toast.ts";
@@ -38,14 +48,11 @@ import {
   type BoardWidgetCellMethods,
   type BoardWidgetCellProps,
 } from "./board-widget-cell-options.ts";
-import {
-  BoardDisabledPlugin,
-  BoardCoreWidget,
-  BoardWidgetRejected,
-} from "./board-widget-cell-render.solid.tsx";
 import { BoardWidgetError } from "./board-widget-error.tsx";
 import { createBoardWidgetFrame, BoardWidgetFrame } from "./board-widget-frame.tsx";
 import { BoardWidgetMenu } from "./board-widget-menu.tsx";
+
+registerEnglishCatalog(registerBoardEnglish);
 
 const loadMcpAppView = () => import("../mcp-app-view-registration.ts");
 const cells = new WeakMap<HTMLElement, BoardWidgetCellHandle>();
@@ -64,15 +71,31 @@ function BoardWidgetCellContent(
     get: () => boardWidgetPresentationReady(host),
   });
   onCleanup(() => cells.delete(host));
-  const [actionError, setActionError] = createSignal("");
+  const actionBinding = createMemo(
+    () =>
+      [
+        props.boardRevision,
+        props.widget?.name,
+        props.widget?.instanceId,
+        props.widget?.revision,
+      ] as const,
+    { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
+  );
+  // A pending receipt would hold sibling bridge roots; observe only settled failures here.
+  const [actionFailure, setActionFailure] = createSignal<Promise<void> | undefined>(() => {
+    actionBinding();
+    return undefined;
+  });
+  const actionFailed = () => actionFailure() !== undefined;
+  const actionOutcome = createMemo(() => actionFailure()?.then(() => null), {
+    loadingValue: undefined,
+  });
   const [actionPending, setActionPending] = createSignal(false);
   const [widgetRoot, setWidgetRoot] = createSignal<HTMLElement>();
-  const [bodyErrored, setBodyErrored] = createSignal(false, { ownedWrite: true });
   let mcpElement: HTMLElementTagNameMap["mcp-app-view"] | undefined;
   // Signals commit later; admission must reject a second action in the same tick.
   let actionInFlight = false;
   let menu: MenuHandle | undefined;
-  let resetBodyError: (() => void) | undefined;
   let connected = true;
   // Retain the MCP renderer until its teardown acknowledgement releases it.
   const [renderedMcp, setRenderedMcp] = createSignal(
@@ -107,6 +130,19 @@ function BoardWidgetCellContent(
     },
     { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
   );
+  // A replacement binding retries a failed body; healthy bindings retain their subtree.
+  const [bodyError, setBodyError] = createSignal<{ error: unknown } | undefined>(
+    () => {
+      void props.widget;
+      void props.boardRevision;
+      void props.widgetFrameUrl;
+      plugins.revision();
+      gatewayBinding();
+      return undefined;
+    },
+    { ownedWrite: true },
+  );
+  const bodyErrored = () => bodyError() !== undefined;
   const loader = createLazyCustomElementRequests();
   const loadState = projectOwner(loader, (owner) => owner.visibleState);
   const loadError = () => {
@@ -133,11 +169,6 @@ function BoardWidgetCellContent(
     widget: () => props.widget,
   });
   const frameState = projectOwner(frame, (owner) => owner);
-  const state = createMemo(() => ({
-    ...appView.snapshot(),
-    error: actionError(),
-    pending: actionPending(),
-  }));
   const activeKinds = () => gateway.read()?.hello?.controlUiWidgetKinds ?? [];
   const contribution = createMemo(() =>
     props.widget?.contentKind === "plugin" && !props.widget.frameUrl
@@ -145,29 +176,34 @@ function BoardWidgetCellContent(
       : null,
   );
 
-  async function runAction(action: () => Promise<void>, failureMessage?: string) {
+  function runAction(run: () => Promise<void>, failureMessage?: string) {
     if (actionInFlight || props.busy) {
       return;
     }
     actionInFlight = true;
+    const binding = actionBinding();
+    // A cell-local action would hold the shared owner's busy updates across bridge roots.
     setActionPending(true);
-    setActionError("");
+    setActionFailure(undefined);
     menu?.close();
-    try {
-      await action();
-    } catch (error) {
-      if (connected) {
-        setActionError(formatUiError(error));
+    const completion = (async () => {
+      try {
+        await run();
+      } finally {
+        actionInFlight = false;
+        if (connected) {
+          setActionPending(false);
+        }
+      }
+    })();
+    void completion.catch(() => {
+      if (connected && actionBinding() === binding) {
+        void setActionFailure(completion);
       }
       if (failureMessage) {
         showToast({ message: failureMessage });
       }
-    } finally {
-      actionInFlight = false;
-      if (connected) {
-        setActionPending(false);
-      }
-    }
+    });
   }
   function selectMenuItem(value: string | undefined) {
     const widget = props.widget;
@@ -176,18 +212,18 @@ function BoardWidgetCellContent(
       return;
     }
     if (value === "remove") {
-      void runAction(() => callbacks.remove(widget));
+      runAction(() => callbacks.remove(widget));
     } else if (value?.startsWith("move:")) {
-      void runAction(() => callbacks.moveToTab(widget, value.slice(5)));
+      runAction(() => callbacks.moveToTab(widget, value.slice(5)));
     } else if (value?.startsWith("resize:")) {
       const size = Object.entries(BOARD_SIZE_PRESETS).find(
         ([preset]) => preset === value.slice(7),
       )?.[1];
       if (size) {
-        void runAction(() => callbacks.resizeTo(widget, size.w, size.h));
+        runAction(() => callbacks.resizeTo(widget, size.w, size.h));
       }
     } else if (value === "height:auto") {
-      void runAction(() =>
+      runAction(() =>
         callbacks.setHeightMode(widget, widget.heightMode !== "fixed" ? "fixed" : "auto"),
       );
     }
@@ -214,19 +250,9 @@ function BoardWidgetCellContent(
   createEffect(
     () => [props.widget, props.boardRevision, active(), contribution(), gatewayBinding()] as const,
     // Owner callbacks intentionally read the current binding captured above.
-    ([widget, boardRevision, isActive, coreWidget], previous) => {
-      if (previous && previous[1] !== boardRevision) {
-        setActionError("");
-      }
+    ([widget, , isActive, coreWidget], previous) => {
       const previousWidget = previous?.[0];
       if (previousWidget && previousWidget !== widget) {
-        if (
-          previousWidget.name !== widget?.name ||
-          previousWidget.instanceId !== widget?.instanceId ||
-          previousWidget.revision !== widget?.revision
-        ) {
-          setActionError("");
-        }
         frame.widgetChanged(previousWidget, widget);
       }
       frame.activityChanged();
@@ -258,20 +284,8 @@ function BoardWidgetCellContent(
       appView.synchronize(props.callbacks, root ?? null);
       frame.update();
       if (props.loadingCovered && presentationReady()) {
-        host.dispatchEvent(new Event("openclaw-board-widget-presentation", { bubbles: true }));
+        props.callbacks?.presentationReady?.();
       }
-    },
-  );
-  let observedErrorBinding = false;
-  createEffect(
-    () => [props.widget, props.widgetFrameUrl, plugins.revision(), gatewayBinding()] as const,
-    () => {
-      // The first observation belongs to the initial render, including its error fallback.
-      if (observedErrorBinding && bodyErrored()) {
-        setBodyErrored(false);
-        resetBodyError?.();
-      }
-      observedErrorBinding = true;
     },
   );
   onCleanup(() => {
@@ -281,31 +295,48 @@ function BoardWidgetCellContent(
     }
     frame.disconnect();
   });
-  const unavailable = () => props.busy || state().pending || !canMutate();
+  const unavailable = () => props.busy || actionPending() || !canMutate();
   const AccessNotice = () => (
     <Show
       when={props.widget?.grantState === "pending"}
       fallback={
         <Show when={props.widget?.grantState === "rejected"}>
-          <BoardWidgetRejected
-            disabled={unavailable()}
-            onRemove={() => void runAction(() => props.callbacks!.remove(props.widget!))}
-          />
+          <div
+            class="board-widget__grant board-widget__grant--rejected"
+            data-test-id="board-rejected"
+          >
+            <strong>{t("board.widget.rejected")}</strong>
+            <span>{t("board.widget.rejectedDetail")}</span>
+            <button
+              class="btn btn--small"
+              type="button"
+              disabled={unavailable()}
+              onClick={() => runAction(() => props.callbacks!.remove(props.widget!))}
+            >
+              {t("board.widget.remove")}
+            </button>
+          </div>
         </Show>
       }
     >
       <BoardPendingCapabilities
         widget={props.widget!}
-        disabled={props.busy || state().pending || !canGrant()}
+        disabled={props.busy || actionPending() || !canGrant()}
         onGrant={(decision) =>
-          void runAction(
+          runAction(
             () => props.callbacks!.grant(props.widget!.name, decision),
             t(decision === "granted" ? "board.widget.allowFailed" : "board.widget.rejectFailed"),
           )
         }
         error={
-          <Show when={state().error}>
-            <BoardWidgetError error={state().error} action inline />
+          <Show when={actionFailed()}>
+            <Errored
+              fallback={(error) => (
+                <BoardWidgetError error={formatUiError(error())} action inline />
+              )}
+            >
+              {actionOutcome()}
+            </Errored>
           </Show>
         }
       />
@@ -318,6 +349,7 @@ function BoardWidgetCellContent(
     return props.widget!;
   };
   const Plugin = () => {
+    const CoreWidget = dynamic(() => contribution()?.tagName);
     const pluginId = () => pluginIdForWidgetKind(props.widget?.pluginKind);
     const key = () => `${pluginId()}/${props.widget?.pluginKind?.slice(pluginId().length + 1)}`;
     const advertised = () =>
@@ -348,11 +380,7 @@ function BoardWidgetCellContent(
     return (
       <Switch
         fallback={
-          <BoardDisabledPlugin
-            pluginId={pluginId()}
-            disabled={unavailable()}
-            onRemove={() => void runAction(() => props.callbacks!.remove(props.widget!))}
-          >
+          <div class="board-widget__disabled-plugin" data-test-id="board-disabled-plugin">
             <Show
               when={disabled()}
               fallback={
@@ -361,7 +389,15 @@ function BoardWidgetCellContent(
             >
               <CustomPluginUiDisabled context={context} pluginId={pluginId()} />
             </Show>
-          </BoardDisabledPlugin>
+            <button
+              class="btn btn--small"
+              type="button"
+              disabled={unavailable()}
+              onClick={() => runAction(() => props.callbacks!.remove(props.widget!))}
+            >
+              {t("board.widget.remove")}
+            </button>
+          </div>
         }
       >
         <Match when={contribution()}>
@@ -372,11 +408,12 @@ function BoardWidgetCellContent(
                 when={(loadState.revision(), isOptionalElementDefined(contribution()!))}
                 fallback={<Loading />}
               >
-                <BoardCoreWidget
-                  tagName={contribution()?.tagName}
-                  widget={props.widget}
-                  session={props.session}
-                  active={active()}
+                <CoreWidget
+                  {...{
+                    "prop:widget": props.widget,
+                    "prop:session": props.session ?? { sessionKey: "" },
+                    "prop:active": active(),
+                  }}
                 />
               </Show>
             }
@@ -429,15 +466,15 @@ function BoardWidgetCellContent(
       <Match when={renderedMcp()}>
         <BoardMcpAppContent
           accessNotice={<AccessNotice />}
-          active={state().active}
-          appView={state().state}
+          active={appView.snapshot().active}
+          appView={appView.snapshot().state}
           busy={unavailable()}
-          loading={state().loading}
-          nearVisible={state().nearVisible}
+          loading={appView.snapshot().loading}
+          nearVisible={appView.snapshot().nearVisible}
           sessionKey={props.sessionKey ?? ""}
           widget={props.widget!}
           expired={() => appView.expire()}
-          remove={() => void runAction(() => props.callbacks!.remove(props.widget!))}
+          remove={() => runAction(() => props.callbacks!.remove(props.widget!))}
           retry={() => appView.retry()}
           viewRef={(element) => {
             mcpElement = element;
@@ -460,20 +497,33 @@ function BoardWidgetCellContent(
     </Switch>
   );
 
+  const BodyBoundary = () => (
+    <>
+      {createErrorBoundary(
+        () => (
+          <Body />
+        ),
+        (error) => {
+          const caught = error();
+          setBodyError((current) => current ?? { error: caught });
+          return null;
+        },
+      )}
+    </>
+  );
+
   const presentation = () =>
     props.widget?.contentKind === "html" || props.widget?.frameUrl
       ? (props.widget.presentation ?? "card")
       : undefined;
   const label = () => props.widget?.title || props.widget?.name || "";
   const scrollable = () =>
-    Boolean(
-      bodyErrored() ||
-      state().error ||
-      props.widget?.grantState === "pending" ||
-      props.widget?.grantState === "rejected" ||
-      props.widget?.contentKind === "mcp-app" ||
-      (props.widget?.contentKind === "plugin" && !props.widget.frameUrl),
-    );
+    bodyErrored() ||
+    actionFailed() ||
+    props.widget?.grantState === "pending" ||
+    props.widget?.grantState === "rejected" ||
+    props.widget?.contentKind === "mcp-app" ||
+    (props.widget?.contentKind === "plugin" && !props.widget.frameUrl);
   const style = (): SolidJSX.CSSProperties => {
     const rect = props.rect!;
     const height =
@@ -516,7 +566,7 @@ function BoardWidgetCellContent(
     }
     event.preventDefault();
     if (event.altKey) {
-      void runAction(() => props.callbacks!.nudge(props.widget!, direction));
+      runAction(() => props.callbacks!.nudge(props.widget!, direction));
     } else {
       props.callbacks!.focus(props.widget!, direction);
     }
@@ -575,7 +625,7 @@ function BoardWidgetCellContent(
               <BoardWidgetMenu
                 widget={props.widget!}
                 tabs={props.tabs ?? []}
-                disabled={props.busy || state().pending}
+                disabled={props.busy || actionPending()}
                 onSelect={selectMenuItem}
                 ref={(handle) => {
                   menu = handle;
@@ -593,20 +643,16 @@ function BoardWidgetCellContent(
             },
           ]}
         >
-          {createErrorBoundary(
-            () => (
-              <Body />
-            ),
-            (error, reset) => {
-              resetBodyError = reset;
-              // Signal equality keeps repeated fallback renders from republishing the error.
-              setBodyErrored(true);
-              return <BoardWidgetError error={error()} />;
-            },
-          )}
-          <Show when={state().error && props.widget!.grantState !== "pending"}>
+          <Show when={bodyError()} fallback={<BodyBoundary />}>
+            {(failure) => <BoardWidgetError error={failure().error} />}
+          </Show>
+          <Show when={actionFailed() && props.widget!.grantState !== "pending"}>
             <div class="board-widget__error-overlay">
-              <BoardWidgetError error={state().error} action />
+              <Errored
+                fallback={(error) => <BoardWidgetError error={formatUiError(error())} action />}
+              >
+                {actionOutcome()}
+              </Errored>
             </div>
           </Show>
         </div>

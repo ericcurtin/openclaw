@@ -40,9 +40,9 @@ import { createAcpRuntime } from "./dispatch-from-config.test-support.js";
 import { expectedNoQueuedReplyResult } from "./dispatch-result-expectations.test-support.js";
 import {
   REPLY_OPERATION_RUN_STATE,
-  resolveReplyOperationAgentTurn,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
+import { resolveReplyOperationAgentTurn } from "./reply-operation-run-state.test-support.js";
 import { requestCurrentSessionStop } from "./reply-run-stop.test-support.js";
 import { prepareReplySourceInput } from "./reply-source-binding.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -53,7 +53,7 @@ let tryDispatchAcpReplyHook: typeof import("../../plugin-sdk/acpx.js").tryDispat
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 let getSessionControllerOperation: typeof import("../../sessions/session-controller.js").getSessionControllerOperation;
 let waitForSessionRunIdle: typeof import("../../sessions/session-controller.js").waitForSessionRunIdle;
-let listActiveReplyRunSessionKeys: typeof import("../../sessions/session-controller.js").listActiveReplyRunSessionKeys;
+let listActiveReplyRunSessionKeys: typeof import("../../sessions/session-controller.queries.js").listActiveReplyRunSessionKeys;
 let createReplyOperation: typeof import("../../sessions/session-controller.js").createReplyOperation;
 let controllerTesting: typeof import("../../sessions/session-controller.test-support.js").testing;
 
@@ -94,12 +94,10 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       await import("./dispatch-from-config.js"));
     ({ tryDispatchAcpReplyHook } = await import("../../plugin-sdk/acpx.js"));
     ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
-    ({
-      getSessionControllerOperation,
-      waitForSessionRunIdle,
-      listActiveReplyRunSessionKeys,
-      createReplyOperation,
-    } = await import("../../sessions/session-controller.js"));
+    ({ getSessionControllerOperation, waitForSessionRunIdle, createReplyOperation } =
+      await import("../../sessions/session-controller.js"));
+    ({ listActiveReplyRunSessionKeys } =
+      await import("../../sessions/session-controller.queries.js"));
     ({ testing: controllerTesting } =
       await import("../../sessions/session-controller.test-support.js"));
   });
