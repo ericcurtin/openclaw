@@ -270,6 +270,13 @@ sidebarTitle: "Troubleshooting"
 
   </Accordion>
 
+  <Accordion title="Compaction fails with an exhausted summary budget">
+    If a cloud reasoning model spends the whole summary budget on thinking, set
+    `agents.defaults.compaction.thinkingLevel` to `"off"`. If it still thinks, try
+    [llmman](/providers/llmman#advanced-configuration) as the compaction model.
+
+  </Accordion>
+
   <Accordion title="Ollama still aborts or hangs on this host">
     If `curl` to Ollama works but agent turns abort, try [llmman](/providers/llmman)
     as the local server.
