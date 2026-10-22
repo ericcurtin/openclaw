@@ -524,7 +524,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const composer = await openMenu(page);
       const menu = composer.locator(".agent-chat__capability-menu");
-      await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
+      await menu.getByRole("menuitem", { name: /^Plugins/ }).click();
       await menu.getByRole("menuitem", { name: "Tool access" }).click();
       await expect.poll(() => menu.getByText(notice).isVisible()).toBe(true);
 
