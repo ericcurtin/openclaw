@@ -1,23 +1,25 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { jsonResult, readStringParam } from "openclaw/plugin-sdk/provider-web-search";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   buildMissingCodeExecutionApiKeyPayload,
   createCodeExecutionToolDefinition,
 } from "./code-execution-tool-shared.js";
+import { XAI_DEFAULT_MODEL_ID } from "./model-definitions.js";
 import {
   readPluginCodeExecutionConfig,
   resolveCodeExecutionEnabled,
 } from "./src/code-execution-config.js";
-import {
-  requestXaiCodeExecution,
-  resolveXaiCodeExecutionMaxTurns,
-  resolveXaiCodeExecutionModel,
-} from "./src/code-execution-shared.js";
+import { requestXaiCodeExecution } from "./src/code-execution-shared.js";
 import { resolveXaiToolApiKeyWithAuth, type XaiToolAuthContext } from "./src/tool-auth-shared.js";
+import {
+  resolveNormalizedXaiToolModel,
+  resolvePositiveIntegerToolConfig,
+} from "./src/tool-config-shared.js";
 
 export function createCodeExecutionTool(options?: {
-  config?: unknown;
-  runtimeConfig?: Record<string, unknown> | null;
+  config?: OpenClawConfig;
+  runtimeConfig?: OpenClawConfig | null;
   auth?: XaiToolAuthContext;
 }) {
   const runtimeConfig = options?.runtimeConfig ?? getRuntimeConfigSnapshot();
@@ -38,8 +40,8 @@ export function createCodeExecutionTool(options?: {
   return createCodeExecutionToolDefinition(
     async (_toolCallId: string, args: Record<string, unknown>) => {
       const apiKey = await resolveXaiToolApiKeyWithAuth({
-        runtimeConfig: (runtimeConfig ?? undefined) as never,
-        sourceConfig: options?.config as never,
+        runtimeConfig: runtimeConfig ?? undefined,
+        sourceConfig: options?.config,
         auth: options?.auth,
       });
       if (!apiKey) {
@@ -47,8 +49,11 @@ export function createCodeExecutionTool(options?: {
       }
 
       const task = readStringParam(args, "task", { required: true });
-      const model = resolveXaiCodeExecutionModel(codeExecutionConfig);
-      const maxTurns = resolveXaiCodeExecutionMaxTurns(codeExecutionConfig);
+      const model = resolveNormalizedXaiToolModel({
+        config: codeExecutionConfig,
+        defaultModel: XAI_DEFAULT_MODEL_ID,
+      });
+      const maxTurns = resolvePositiveIntegerToolConfig(codeExecutionConfig, "maxTurns");
       const timeoutSeconds =
         typeof codeExecutionConfig?.timeoutSeconds === "number" &&
         Number.isFinite(codeExecutionConfig.timeoutSeconds)
