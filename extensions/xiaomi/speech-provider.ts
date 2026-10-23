@@ -153,7 +153,9 @@ export function buildXiaomiSpeechProvider(): SpeechProviderPlugin {
         init: {
           method: "POST",
           headers: {
+            // Pay-as-you-go accepts `api-key`; Token Plan CN accepts only Bearer.
             "api-key": config.apiKey,
+            Authorization: `Bearer ${config.apiKey}`,
             "Content-Type": "application/json",
           },
           body: JSON.stringify({

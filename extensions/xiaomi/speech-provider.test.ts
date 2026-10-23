@@ -137,6 +137,7 @@ describe("buildXiaomiSpeechProvider", () => {
       expect(url).toBe("https://api.xiaomimimo.com/v1/chat/completions");
       expect(init?.headers).toEqual({
         "api-key": "sk-test",
+        Authorization: "Bearer sk-test",
         "Content-Type": "application/json",
       });
       expect(JSON.parse(init!.body as string)).toEqual({
@@ -171,7 +172,9 @@ describe("buildXiaomiSpeechProvider", () => {
       vi.stubEnv("XIAOMI_API_KEY", "  fake  ");
       mockAudioResponse();
       await synthesize({ providerConfig: {} });
-      expect(new Headers(requestInit()?.headers).get("api-key")).toBe("fake");
+      const headers = new Headers(requestInit()?.headers);
+      expect(headers.get("api-key")).toBe("fake");
+      expect(headers.get("authorization")).toBe("Bearer fake");
     });
 
     it.each([

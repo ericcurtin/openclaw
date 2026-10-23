@@ -148,6 +148,10 @@ message.
 }
 ```
 
+For a Token Plan key (`tp-...`), set `baseUrl` to your regional Token Plan URL
+(for example `https://token-plan-cn.xiaomimimo.com/v1`). OpenClaw sends the key
+as both `api-key` and `Authorization: Bearer`.
+
 Built-in voices: `mimo_default`, `default_zh`, `default_en`, `Mia`, `Chloe`,
 `Milo`, `Dean`. The preset-voice model `mimo-v2.5-tts` uses `audio.voice`, so
 OpenClaw sends `speakerVoice` for that model.
