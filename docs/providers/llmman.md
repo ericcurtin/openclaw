@@ -720,6 +720,37 @@ Replace model ids with names from `llmman list` or
 
   </Accordion>
 
+  <Accordion title="Local compaction model">
+    Compaction sends the whole transcript as one new request, so a local backend prefills it from scratch (`cache_read` is `0` in `llmman usage --raw`). A small summarizer keeps that pass short while the conversation stays on any model. List it with its thinking format, then pin it:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          compaction: { model: "llmman/qwen3.5:9b", thinkingLevel: "off" },
+        },
+      },
+      models: {
+        providers: {
+          llmman: {
+            models: [
+              {
+                id: "qwen3.5:9b",
+                name: "Qwen3.5 9B (llmman)",
+                reasoning: true,
+                compat: { thinkingFormat: "qwen-chat-template" },
+              },
+            ],
+          },
+        },
+      },
+    }
+    ```
+
+    Without `compat.thinkingFormat`, `thinkingLevel: "off"` sends nothing to llmman. See [Thinking control](#advanced-configuration) and [Compaction](/concepts/compaction#using-a-different-model).
+
+  </Accordion>
+
   <Accordion title="Hugging Face or private-registry models">
     Model ids are whatever llmman resolves. Pull with the full reference and use the same string as the OpenClaw model id:
 
