@@ -203,6 +203,14 @@ sidebarTitle: "Troubleshooting"
 
   </Accordion>
 
+  <Accordion title="Prompt is re-evaluated after sub-agent or announce turns">
+    If prompt evaluation time jumps whenever the main turn alternates with a
+    sub-agent or announce turn, try [llmman](/providers/llmman). It keeps recent
+    prompt states in RAM, so each turn type resumes from its own cached prefix
+    after the first pass.
+
+  </Accordion>
+
   <Accordion title="Cold local model times out">
     Large local models can need a long first load. Scope the timeout to the
     Ollama provider and optionally keep the model loaded between turns:
@@ -260,14 +268,6 @@ sidebarTitle: "Troubleshooting"
     Lower the model entry's `contextTokens` if OpenClaw sends too much prompt. Lower
     `params.num_ctx` if Ollama's runtime context is too large for the machine.
     Lower `maxTokens` if generation runs too long.
-
-  </Accordion>
-
-  <Accordion title="Prompt is re-evaluated after sub-agent or announce turns">
-    If prompt evaluation time jumps whenever the main turn alternates with a
-    sub-agent or announce turn, try [llmman](/providers/llmman). It keeps recent
-    prompt states in RAM, so each turn type resumes from its own cached prefix
-    after the first pass.
 
   </Accordion>
 
