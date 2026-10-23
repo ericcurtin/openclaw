@@ -531,8 +531,8 @@ model.
 - Platforms without a verified managed build should use an existing server.
 - Managed embedding server keeps exiting or is OOM-killed: serve embeddings
   from an external [llmman](/providers/llmman#advanced-configuration) daemon
-  instead, with `LLMMAN_NUM_PARALLEL=1` on a small host. It relaunches a dead
-  backend on the next request, and the Gateway manages no child process.
+  instead. It relaunches a dead backend on the next request, and the Gateway
+  manages no child process.
 
 OpenClaw does not auto-select ROCm, SYCL, OpenVINO, or Vulkan archives.
 
