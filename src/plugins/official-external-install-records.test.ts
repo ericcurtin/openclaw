@@ -3,6 +3,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
   isCommunityClawHubInstallRecord,
   isOfficialCatalogLookupPluginIdReplacement as isReplacement,
+  isThirdPartyNpmInstallRecord,
   isTrustedOfficialCatalogLookupDuplicate as isDuplicate,
   isTrustedOfficialPluginInstallRecord as isTrusted,
   resolveTrustedSourceLinkedOfficialClawHubInstall as resolveClawHub,
@@ -43,6 +44,8 @@ function clawhubInstall(
 describe("official plugin install trust", () => {
   const packageName = "@openclaw/fish-audio-speech";
   const npmRecord = npmInstall(packageName, "2026.7.2");
+  const trusts = (record: PluginInstallRecord) =>
+    isTrusted({ pluginId: "fish-audio-speech", packageName, record });
 
   it("binds the declared legacy id to the actual official package", () => {
     expect(isTrusted({ pluginId: "fish-audio", packageName, record: npmRecord })).toBe(true);
@@ -70,32 +73,18 @@ describe("official plugin install trust", () => {
   ] satisfies Partial<PluginInstallRecord>[])(
     "rejects unsupported npm provenance %j",
     (override) => {
-      expect(
-        isTrusted({
-          pluginId: "fish-audio-speech",
-          packageName,
-          record: { ...npmRecord, ...override },
-        }),
-      ).toBe(false);
+      expect(trusts({ ...npmRecord, ...override })).toBe(false);
     },
   );
 
-  it.each([
-    { name: "default official host", overrides: {}, trusted: true },
-    { name: "missing authority", overrides: { clawhubUrl: undefined }, trusted: false },
-    { name: "custom host", overrides: { clawhubUrl: "https://example.invalid" }, trusted: false },
-    { name: "community channel", overrides: { clawhubChannel: "community" }, trusted: false },
-    { name: "conflicting resolution", overrides: { resolvedName: "@vendor/acpx" }, trusted: false },
-    {
-      name: "resolved identity alone",
-      overrides: { spec: undefined, clawhubPackage: undefined },
-      trusted: false,
-    },
-  ] satisfies Array<{
-    name: string;
-    overrides: Partial<PluginInstallRecord>;
-    trusted: boolean;
-  }>)("requires current ClawHub authority: $name", ({ overrides, trusted }) => {
+  it.each<[Partial<PluginInstallRecord>, boolean]>([
+    [{}, true],
+    [{ clawhubUrl: undefined }, false],
+    [{ clawhubUrl: "https://example.invalid" }, false],
+    [{ clawhubChannel: "community" }, false],
+    [{ resolvedName: "@vendor/acpx" }, false],
+    [{ spec: undefined, clawhubPackage: undefined }, false],
+  ])("requires current ClawHub authority %j: %s", (overrides, trusted) => {
     expect(
       isTrusted({
         pluginId: "acpx",
@@ -116,8 +105,14 @@ describe("community ClawHub install records", () => {
     clawhubChannel: "community",
   };
 
+  const isCommunity = (
+    candidate: string | undefined,
+    install: PluginInstallRecord,
+    pluginId = "community-demo",
+  ) => isCommunityClawHubInstallRecord(pluginId, candidate, install);
+
   it("accepts a consistent community listing", () => {
-    expect(isCommunityClawHubInstallRecord({ packageName, record })).toBe(true);
+    expect(isCommunity(packageName, record)).toBe(true);
   });
 
   it.each([
@@ -129,24 +124,50 @@ describe("community ClawHub install records", () => {
   ] satisfies Array<{ name: string; overrides: Partial<PluginInstallRecord> }>)(
     "rejects $name",
     ({ overrides }) => {
-      expect(
-        isCommunityClawHubInstallRecord({ packageName, record: { ...record, ...overrides } }),
-      ).toBe(false);
+      expect(isCommunity(packageName, { ...record, ...overrides })).toBe(false);
     },
   );
 
   it.each([undefined, "@acme/other"])("rejects candidate package %s", (candidate) => {
-    expect(isCommunityClawHubInstallRecord({ packageName: candidate, record })).toBe(false);
+    expect(isCommunity(candidate, record)).toBe(false);
   });
 
   it("rejects an official catalog package recorded as community", () => {
     expect(
-      isCommunityClawHubInstallRecord({
-        packageName: "@openclaw/acpx",
-        record: { ...record, spec: undefined, clawhubPackage: "@openclaw/acpx" },
+      isCommunity("@openclaw/acpx", {
+        ...record,
+        spec: undefined,
+        clawhubPackage: "@openclaw/acpx",
       }),
     ).toBe(false);
   });
+
+  it("rejects an official plugin id claimed by a community package", () => {
+    expect(isCommunity(packageName, record, "acpx")).toBe(false);
+  });
+});
+
+describe("third-party npm install identity", () => {
+  it.each([
+    { resolvedName: "@vendor/other" },
+    { resolvedSpec: "@vendor/other@1.0.0" },
+    { clawhubPackage: "@vendor/other" },
+    { spec: "file:/tmp/plugin.tgz" },
+    { artifactKind: "npm-pack" },
+    { sourcePath: "/tmp/plugin" },
+    { source: "clawhub" },
+  ] satisfies Partial<PluginInstallRecord>[])(
+    "rejects conflicting or local evidence %j",
+    (override) => {
+      expect(
+        isThirdPartyNpmInstallRecord(
+          "demo",
+          "@vendor/demo",
+          npmInstall("@vendor/demo", "1.0.0", override),
+        ),
+      ).toBe(false);
+    },
+  );
 });
 
 describe("trusted official npm install records", () => {
@@ -180,66 +201,43 @@ describe("trusted official npm install records", () => {
       ...expected,
       replacementPluginId: "openclaw-qqbot",
     });
-    expect(
-      isReplacement({
-        expectedPluginId: "qqbot",
-        expectedReplacementPluginId: "openclaw-qqbot",
-      }),
-    ).toBe(true);
-    expect(
-      isReplacement({
-        expectedPluginId: "fish-audio",
-        expectedReplacementPluginId: "fish-audio-speech",
-      }),
-    ).toBe(false);
+    const replacement = (expectedPluginId: string, expectedReplacementPluginId: string) =>
+      isReplacement({ expectedPluginId, expectedReplacementPluginId });
+    expect(replacement("qqbot", "openclaw-qqbot")).toBe(true);
+    expect(replacement("fish-audio", "fish-audio-speech")).toBe(false);
   });
 
-  it("fails closed when a legacy npm package identity is mixed with another package", () => {
+  it.each([
+    ["openclaw-qqbot", { resolvedName: "@vendor/qqbot" }],
+    ["qqbot", { sourcePath: "/tmp/openclaw-qqbot" }],
+  ] as const)("rejects %s migration with invalid provenance %j", (pluginId, override) => {
     expect(
       resolveNpm({
-        pluginId: "openclaw-qqbot",
-        record: npmInstall("@openclaw/qqbot", "1.9.0", { resolvedName: "@vendor/qqbot" }),
+        pluginId,
+        record: npmInstall("@openclaw/qqbot", "1.9.0", override),
       }),
     ).toBeUndefined();
   });
 
-  it("rejects local source path provenance before migrating a legacy npm package", () => {
-    expect(
-      resolveNpm({
-        pluginId: "qqbot",
-        record: npmInstall("@openclaw/qqbot", "1.9.0", { sourcePath: "/tmp/openclaw-qqbot" }),
-      }),
-    ).toBeUndefined();
-  });
-
-  it("drops a catalog lookup duplicate only for unanimous canonical npm identity", () => {
-    const duplicate = (replacementRecord: PluginInstallRecord) =>
-      isDuplicate({
-        pluginId: "qqbot",
-        replacementPluginId: "openclaw-qqbot",
-        replacementRecord,
-      });
-    expect(duplicate(npmInstall("@tencent-connect/openclaw-qqbot", "2.0.1"))).toBe(true);
-    expect(
-      duplicate(
-        npmInstall("@vendor/openclaw-qqbot", "1.0.0", {
-          resolvedName: "@tencent-connect/openclaw-qqbot",
+  it.each<[string, Partial<PluginInstallRecord>, boolean]>([
+    ["@tencent-connect/openclaw-qqbot", {}, true],
+    ["@vendor/openclaw-qqbot", { resolvedName: "@tencent-connect/openclaw-qqbot" }, false],
+    ["@tencent-connect/openclaw-qqbot", { artifactKind: "npm-pack" }, false],
+  ])(
+    "drops a catalog duplicate only for unanimous npm identity %s %j",
+    (name, override, expected) => {
+      expect(
+        isDuplicate({
+          pluginId: "qqbot",
+          replacementPluginId: "openclaw-qqbot",
+          replacementRecord: npmInstall(name, "2.0.1", override),
         }),
-      ),
-    ).toBe(false);
-    expect(
-      duplicate(
-        npmInstall("@tencent-connect/openclaw-qqbot", "2.0.1", { artifactKind: "npm-pack" }),
-      ),
-    ).toBe(false);
-  });
+      ).toBe(expected);
+    },
+  );
 
   it("never accepts the legacy Fish Audio id through ClawHub", () => {
-    expect(
-      resolveClawHub({
-        pluginId: "fish-audio",
-        record: clawhubInstall("@openclaw/fish-audio-speech"),
-      }),
-    ).toBeUndefined();
+    const record = clawhubInstall("@openclaw/fish-audio-speech");
+    expect(resolveClawHub({ pluginId: "fish-audio", record })).toBeUndefined();
   });
 });
