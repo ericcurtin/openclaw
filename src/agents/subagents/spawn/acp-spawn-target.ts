@@ -2,13 +2,12 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { hasAcpAgentAllowlist, resolveAcpAgentPolicyError } from "../../../acp/policy.js";
 import { getAcpRuntimeBackend } from "../../../acp/runtime/registry.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { normalizeAgentIdStrict, normalizeOptionalAgentId } from "../../../routing/session-key.js";
 import {
-  normalizeAgentId,
-  normalizeAgentIdStrict,
-  normalizeOptionalAgentId,
-} from "../../../routing/session-key.js";
-import { listAgentEntries, resolveAgentEntry } from "../../agent-scope-config.js";
-import { listAgentIds } from "../../agent-scope.js";
+  resolveConfiguredAcpHarnessIds,
+  resolveConfiguredAcpSubagentTargetIds,
+} from "../../agent-roster.js";
+import { resolveAgentEntry } from "../../agent-scope-config.js";
 import { resolveAcpSenderSpawnError } from "./acp-spawn-policy.js";
 import {
   describeTargetIdList,
@@ -124,7 +123,7 @@ export function describeAcpSpawnTargetParameter(
           requesterAgentId: subagentRequesterId,
           targetAgentId: target.agentId,
           requestedAgentId,
-          configuredAgentIds: resolveConfiguredAcpSubagentTargetIds(cfg),
+          configuredAgentIds: Array.from(resolveConfiguredAcpSubagentTargetIds(cfg)),
         }).ok)
     );
   };
@@ -145,37 +144,4 @@ export function describeAcpSpawnTargetParameter(
   return examples.length > 0
     ? `${describeTargetIdList("ACP harness id, for example", examples)} ${omitClause}`
     : `ACP harness id. ${omitClause}`;
-}
-
-/** ACP harness ids and ACP-runtime config agents named by config; native agent ids are excluded. */
-function resolveConfiguredAcpHarnessIds(cfg: OpenClawConfig): Set<string> {
-  const ids = new Set<string>();
-  for (const agent of listAgentEntries(cfg)) {
-    if (agent.runtime?.type !== "acp") {
-      continue;
-    }
-    ids.add(normalizeAgentId(agent.id));
-    const acpAgent = normalizeOptionalAgentId(agent.runtime.acp?.agent);
-    if (acpAgent) {
-      ids.add(acpAgent);
-    }
-  }
-  const defaultAgent = normalizeOptionalAgentId(cfg.acp?.defaultAgent);
-  if (defaultAgent) {
-    ids.add(defaultAgent);
-  }
-  for (const entry of cfg.acp?.allowedAgents ?? []) {
-    if (entry.trim() === "*") {
-      continue;
-    }
-    const id = normalizeOptionalAgentId(entry);
-    if (id) {
-      ids.add(id);
-    }
-  }
-  return ids;
-}
-
-export function resolveConfiguredAcpSubagentTargetIds(cfg: OpenClawConfig): string[] {
-  return Array.from(new Set([...listAgentIds(cfg), ...resolveConfiguredAcpHarnessIds(cfg)]));
 }

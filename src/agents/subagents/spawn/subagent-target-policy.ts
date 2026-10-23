@@ -11,7 +11,7 @@ import { resolveSenderRestrictedSpawnError } from "../../spawn-requester-policy.
 // Normalized agent ids are at most 64 chars, so this count also bounds the listed bytes.
 const MAX_LISTED_TARGET_IDS = 20;
 
-type SubagentTargetPolicyResult = { ok: true } | { ok: false; allowedText: string; error: string };
+type SubagentTargetPolicyResult = { ok: true } | { ok: false; error: string };
 
 function normalizeAllowAgents(allowAgents: readonly string[] | undefined): Set<string> | undefined {
   if (!Array.isArray(allowAgents)) {
@@ -182,7 +182,6 @@ export function resolveSubagentTargetPolicy(params: {
   const policy = normalizeAllowAgents(params.allowAgents);
   return {
     ok: false,
-    allowedText,
     error:
       allowed.allowAny || policy?.has(targetAgentId)
         ? `agentId "${targetAgentId}" is not in the configured agent registry (allowed: ${allowedText})`
