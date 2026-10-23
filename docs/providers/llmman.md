@@ -454,6 +454,10 @@ by the daemon. `llmman providers` shows which providers have a key;
 direct hosted access without llmman in the path, configure the
 [OpenAI](/providers/openai) provider instead.
 
+Ollama Cloud works the same way, for example
+`llmman.provider/ollama-cloud/minimax-m3.1-flash` with your Ollama Cloud key as
+the `apiKey`.
+
 ## Vision and image description
 
 Models that ship a companion `mmproj` projector are vision-capable; `qwen3.8`

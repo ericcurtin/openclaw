@@ -116,6 +116,8 @@ authorize `/api/embed`; force them with `OPENCLAW_LIVE_OLLAMA_EMBEDDINGS=1`.
 - Tool-call or raw JSON issues on custom Ollama hosts: check whether you are
   accidentally using an OpenAI-compatible `/v1` URL. Ollama routes should use
   the native base URL with no `/v1` suffix.
+- Hosted tool calls still fail: try
+  [llmman](/providers/llmman#hosted-models-through-llmman) as the endpoint.
 
 ## Related
 
