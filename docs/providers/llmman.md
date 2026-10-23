@@ -720,6 +720,23 @@ Replace model ids with names from `llmman list` or
 
   </Accordion>
 
+  <Accordion title="Local compaction model">
+    Summarize with a local model while the conversation stays on any provider. List the model under `models.providers.llmman.models`, then pin it:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          compaction: { model: "llmman/qwen3.8", thinkingLevel: "off" },
+        },
+      },
+    }
+    ```
+
+    `thinkingLevel: "off"` stops a reasoning model from spending the summary budget on thinking. See [Compaction](/concepts/compaction#using-a-different-model).
+
+  </Accordion>
+
   <Accordion title="Hugging Face or private-registry models">
     Model ids are whatever llmman resolves. Pull with the full reference and use the same string as the OpenClaw model id:
 

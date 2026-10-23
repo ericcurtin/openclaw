@@ -226,6 +226,8 @@ This works with local models too, for example a second Ollama model dedicated to
 }
 ```
 
+[llmman](/providers/llmman#common-recipes) works the same way for a local summarizer.
+
 When unset, compaction starts with the active session model. If summarization fails with a model-fallback-eligible provider error, OpenClaw retries that compaction attempt through the session's existing model fallback chain. The fallback choice is temporary and is not written back to session state. An explicit `agents.defaults.compaction.model` override remains exact and does not inherit the session fallback chain.
 
 Preflight compaction also uses that chain when the primary auth profile is already in cooldown. Each candidate must pass auth admission before summarization; a healthy fallback can compact the session without waiting for the primary cooldown to expire.
