@@ -271,7 +271,8 @@ sidebarTitle: "Troubleshooting"
   </Accordion>
 
   <Accordion title="Compaction fails with an exhausted summary budget">
-    If a cloud reasoning model spends the whole summary budget on thinking, set
+    If compaction fails with `summary output budget ... was exhausted without
+    visible text`, a reasoning model spent the whole summary budget on thinking. Set
     `agents.defaults.compaction.thinkingLevel` to `"off"`. If it still thinks, try
     [llmman](/providers/llmman#advanced-configuration) as the compaction model.
 

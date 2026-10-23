@@ -872,7 +872,7 @@ container, or service account.
 
     The lean `infer model run` path does not read the agent-level `params` recipe above; use the compatibility declaration and `--thinking off` for that check. Do not combine a fixed `enable_thinking` agent param with per-run control, since the fixed param overrides the generated value. Apply Qwen-specific controls to a hybrid ref only if both its local and hosted backends accept them.
 
-    Compaction summaries use their own level, `agents.defaults.compaction.thinkingLevel`, which defaults to `low`. With the declaration above, `off` keeps thinking from using up the summary budget. `compaction.model` runs summaries on this model while the chat model stays elsewhere, such as an Ollama cloud model:
+    Compaction summaries use their own level, `agents.defaults.compaction.thinkingLevel`, which defaults to `low`. A thinking model can then spend the whole summary budget, and compaction fails with `summary output budget (N tokens) was exhausted without visible text`. With the declaration above, `off` fixes that. `compaction.model` runs summaries on this model while the chat model stays elsewhere, such as an Ollama cloud model:
 
     ```json5
     {
