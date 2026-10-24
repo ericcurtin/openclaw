@@ -7,7 +7,10 @@ import {
   resolveSubagentSpawnTargetConfig,
 } from "../subagents/spawn/subagent-target-policy.js";
 
-/** Describe the `sessions_spawn` `agentId` parameter for the requester's admitted targets. */
+/**
+ * Describe the `sessions_spawn` `agentId` parameter for the requester's admitted targets.
+ * Returns undefined when neither runtime has a target choice worth describing.
+ */
 export function describeSessionsSpawnAgentId(params: {
   cfg: OpenClawConfig;
   requesterAgentId?: string;
@@ -19,7 +22,7 @@ export function describeSessionsSpawnAgentId(params: {
     SpawnedToolContext,
     "inheritedToolPolicySource" | "workspaceDir" | "sessionPermissionPolicy"
   >;
-}): string {
+}): string | undefined {
   const requesterAgentId = params.requesterAgentId ?? "";
   const { inheritedToolPolicySource, workspaceDir, sessionPermissionPolicy } =
     params.spawnContext ?? {};
@@ -44,5 +47,6 @@ export function describeSessionsSpawnAgentId(params: {
     workspaceDir,
     sessionPermissionPolicy,
   });
-  return `With runtime="subagent" (default): ${native} With runtime="acp": ${acp}`;
+  const nativeClause = native ? `With runtime="subagent" (default): ${native} ` : "";
+  return `${nativeClause}With runtime="acp": ${acp}`;
 }

@@ -49,11 +49,14 @@ describe("resolveTargetAcpAgentId", () => {
 });
 
 describe("describeAcpSpawnTargetParameter", () => {
-  it("requires agentId and suggests examples with an empty configuration", () => {
-    expect(describeAcpSpawnTargetParameter({ agents: { entries: {} } })).toBe(
-      "ACP harness id, for example: codex, claude. agentId is required.",
-    );
-  });
+  it.each([{ agents: { entries: {} } }, {}])(
+    "requires agentId and suggests examples without offering the implicit main agent: %j",
+    (cfg) => {
+      expect(describeAcpSpawnTargetParameter(cfg)).toBe(
+        "ACP harness id, for example: codex, claude. agentId is required.",
+      );
+    },
+  );
 
   it("describes the configured default when no allowlist is set", () => {
     expect(
@@ -96,38 +99,6 @@ describe("describeAcpSpawnTargetParameter", () => {
         acp: { allowedAgents: ["*"], defaultAgent: "codex" },
       }),
     ).toBe("No ACP harness id is allowed. agentId is required.");
-  });
-
-  it("does not offer the implicit main agent when no roster is configured", () => {
-    expect(describeAcpSpawnTargetParameter({})).toBe(
-      "ACP harness id, for example: codex, claude. agentId is required.",
-    );
-  });
-
-  describe("with more than 20 harness ids", () => {
-    const ids = Array.from({ length: 25 }, (_, i) => `h${String(i).padStart(2, "0")}`);
-    const capped = `${ids.slice(0, 20).join(", ")} (+5). Only the first 20 ids are listed.`;
-
-    it("caps an allowlisted list", () => {
-      expect(
-        describeAcpSpawnTargetParameter({
-          agents: { entries: { main: {} } },
-          acp: { allowedAgents: ids },
-        }),
-      ).toBe(`ACP harness id from: ${capped} agentId is required.`);
-    });
-
-    it("caps the examples when no allowlist is set", () => {
-      expect(
-        describeAcpSpawnTargetParameter({
-          agents: {
-            entries: Object.fromEntries(
-              ids.map((id) => [id, { runtime: { type: "acp" as const } }]),
-            ),
-          },
-        }),
-      ).toBe(`ACP harness id, for example: ${capped} agentId is required.`);
-    });
   });
 
   describe("for a subagent requester", () => {

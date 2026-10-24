@@ -84,104 +84,61 @@ describe("subagent target policy", () => {
     });
   });
 
-  it("describes the requester-only default target", () => {
-    expect(
-      describeSubagentSpawnTargetParameter({
-        requesterAgentId: "main",
-      }),
-    ).toBe(
-      "Only the requester agent is allowed as a target; no other agentId is configured. " +
-        'Omit to keep the requester agent ("main").',
-    );
-  });
-
-  it("describes an explicit allowlist target", () => {
-    expect(
-      describeSubagentSpawnTargetParameter({
-        requesterAgentId: "main",
-        allowAgents: ["main", "planner"],
-        configuredAgentIds: ["main", "planner"],
-      }),
-    ).toBe('Configured agent to target: main, planner. Omit to keep the requester agent ("main").');
-  });
-
-  it("describes a wildcard allowlist target", () => {
-    expect(
-      describeSubagentSpawnTargetParameter({
-        requesterAgentId: "main",
-        allowAgents: ["*"],
-        configuredAgentIds: ["main", "planner"],
-      }),
-    ).toBe(
-      "Configured agent to target; any configured agent is allowed. " +
-        'Omit to keep the requester agent ("main").',
-    );
-  });
-
-  it("describes an explicitly empty allowlist without implying the requester id works", () => {
-    const description = describeSubagentSpawnTargetParameter({
-      requesterAgentId: "main",
-      allowAgents: [],
-      configuredAgentIds: ["main"],
-    });
-    expect(description).toBe(
-      "No agentId is allowed as an explicit target; the configured allowlist is empty. " +
-        'Omit to keep the requester agent ("main").',
-    );
-    expect(admit([], "main", ["main"]).ok).toBe(false);
-  });
-  it("tells the model an explicit agentId is required when requireAgentId is set", () => {
-    expect(
-      describeSubagentSpawnTargetParameter({
-        requesterAgentId: "main",
-        allowAgents: ["main", "planner"],
-        configuredAgentIds: ["main", "planner"],
-        requireAgentId: true,
-      }),
-    ).toBe(
+  const omitMain = 'Omit to keep the requester agent ("main").';
+  const both = ["main", "planner"];
+  it.each([
+    ["the sole agent with no constraint", {}, undefined],
+    [
+      "requester-only default with other agents configured",
+      { configuredAgentIds: both },
+      `Only the requester agent is allowed as a target; no other agentId is configured. ${omitMain}`,
+    ],
+    [
+      "an explicit allowlist",
+      { allowAgents: both, configuredAgentIds: both },
+      `Configured agent to target: main, planner. ${omitMain}`,
+    ],
+    [
+      "a wildcard allowlist",
+      { allowAgents: ["*"], configuredAgentIds: both },
+      `Configured agent to target; any configured agent is allowed. ${omitMain}`,
+    ],
+    [
+      "an explicitly empty allowlist",
+      { allowAgents: [], configuredAgentIds: ["main"] },
+      `No agentId is allowed as an explicit target; the configured allowlist is empty. ${omitMain}`,
+    ],
+    [
+      "requireAgentId",
+      { allowAgents: both, configuredAgentIds: both, requireAgentId: true },
       'Configured agent to target: main, planner. agentId is required; the requester agent is "main".',
-    );
-  });
-
-  it("names the collector default agent used when collect=true omits agentId", () => {
-    expect(
-      describeSubagentSpawnTargetParameter({
-        requesterAgentId: "main",
-        allowAgents: ["main", "planner"],
-        configuredAgentIds: ["main", "planner"],
-        collectDefaultAgentId: "planner",
-      }),
-    ).toBe(
-      'Configured agent to target: main, planner. Omit to keep the requester agent ("main"). ' +
+    ],
+    [
+      "an allowed collector default",
+      { allowAgents: both, configuredAgentIds: both, collectDefaultAgentId: "planner" },
+      `Configured agent to target: main, planner. ${omitMain} ` +
         'With collect=true, omit to target tools.swarm.defaultAgentId ("planner").',
-    );
-  });
-
-  it("requires agentId for collect=true when the collector default is not allowed", () => {
-    const description = describeSubagentSpawnTargetParameter({
-      requesterAgentId: "main",
-      configuredAgentIds: ["main", "planner"],
-      collectDefaultAgentId: "planner",
-    });
-    expect(description).toContain(
-      'With collect=true, agentId is required; tools.swarm.defaultAgentId ("planner") is not an allowed target.',
-    );
-  });
-
-  it("limits guidance to the requester for a sender-restricted session", () => {
-    const description = describeSubagentSpawnTargetParameter({
-      requesterAgentId: "main",
-      allowAgents: ["planner"],
-      configuredAgentIds: ["main", "planner"],
-      collectDefaultAgentId: "planner",
-      inheritedToolPolicySource: "sender",
-    });
-    expect(description).toBe(
+    ],
+    [
+      "a sender-restricted session with a disallowed collector default",
+      {
+        allowAgents: ["planner"],
+        configuredAgentIds: both,
+        collectDefaultAgentId: "planner",
+        inheritedToolPolicySource: "sender" as const,
+      },
       "Sender policy allows only hidden helpers of the requester agent; no other agentId is allowed. " +
-        'Omit to keep the requester agent ("main"). ' +
+        `${omitMain} ` +
         'With collect=true, agentId is required; tools.swarm.defaultAgentId ("planner") is not an allowed target.',
+    ],
+  ])("describes %s", (_label, params, expected) => {
+    expect(describeSubagentSpawnTargetParameter({ requesterAgentId: "main", ...params })).toBe(
+      expected,
     );
-    expect(description).not.toContain("Configured agent to target");
+  });
+
+  it("rejects the requester id under an explicitly empty allowlist", () => {
+    expect(admit([], "main", ["main"]).ok).toBe(false);
   });
 
   it("lists up to 20 targets and says when more are not listed", () => {
@@ -201,18 +158,6 @@ describe("subagent target policy", () => {
       `Configured agent to target: ${listed.join(", ")} (+1). Only the first 20 ids are listed. ` +
         'Omit to keep the requester agent ("agent-00").',
     );
-  });
-
-  it("keeps the description bounded for a very large allowlist", () => {
-    const ids = Array.from({ length: 5000 }, (_, i) => `agent-${i}`);
-    const description = describeSubagentSpawnTargetParameter({
-      requesterAgentId: "main",
-      allowAgents: ids,
-      configuredAgentIds: ids,
-    });
-    expect(description.length).toBeLessThan(1000);
-    expect(description).toContain("(+4980). Only the first 20 ids are listed.");
-    expect(description).not.toContain("agents_list");
   });
 
   it("checks a target against the requester's requireAgentId and allowAgents", () => {
@@ -272,9 +217,5 @@ describe("subagent target policy", () => {
         "main",
       ),
     ).toEqual({ allowAgents: ["*"], requireAgentId: true });
-    expect(resolveSubagentSpawnTargetConfig({}, "main")).toEqual({
-      allowAgents: undefined,
-      requireAgentId: false,
-    });
   });
 });

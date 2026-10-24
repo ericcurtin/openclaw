@@ -81,7 +81,11 @@ export function describeTargetIdList(label: string, ids: readonly string[]): str
   return `${label}: ${list}.${overflow}`;
 }
 
-/** Describe the sessions_spawn `agentId` parameter's allowed targets for a requester. */
+/**
+ * Describe the sessions_spawn `agentId` parameter's allowed targets for a requester.
+ * Returns undefined when the requester is the only configured agent and nothing
+ * else constrains the call, so single-agent setups carry no extra prompt text.
+ */
 export function describeSubagentSpawnTargetParameter(params: {
   requesterAgentId: string;
   allowAgents?: readonly string[];
@@ -90,7 +94,7 @@ export function describeSubagentSpawnTargetParameter(params: {
   /** `tools.swarm.defaultAgentId`, used when collect=true omits agentId. */
   collectDefaultAgentId?: string;
   inheritedToolPolicySource?: "sender";
-}): string {
+}): string | undefined {
   const requesterAgentId = normalizeAgentId(params.requesterAgentId);
   const senderRestricted = params.inheritedToolPolicySource === "sender";
   const policyAllowed = resolveSubagentAllowedTargetIds(params);
@@ -128,6 +132,12 @@ export function describeSubagentSpawnTargetParameter(params: {
     return `No agentId is allowed as an explicit target; the configured allowlist is empty. ${omitClause}${collectClause}`;
   }
   if (allowed.allowedIds.filter((id) => id !== requesterAgentId).length === 0) {
+    const hasOtherConfiguredAgent = (params.configuredAgentIds ?? []).some(
+      (id) => normalizeAgentId(id) !== requesterAgentId,
+    );
+    if (!hasOtherConfiguredAgent && !params.requireAgentId && !collectClause) {
+      return undefined;
+    }
     return `Only the requester agent is allowed as a target; no other agentId is configured. ${omitClause}${collectClause}`;
   }
   return `${describeTargetIdList("Configured agent to target", allowed.allowedIds)} ${omitClause}${collectClause}`;

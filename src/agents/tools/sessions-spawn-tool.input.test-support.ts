@@ -226,32 +226,11 @@ export function registerSessionsSpawnInputTests({
     expect(descriptionFor("agent:main:main")).toContain(omitDefault);
   });
 
-  it("advertises only the requester to a sender-restricted session", () => {
-    registerAcpBackendForTest();
-    const config = {
-      acp: { defaultAgent: "codex" },
-      tools: { swarm: { defaultAgentId: "planner" } },
-      agents: {
-        defaults: { subagents: { allowAgents: ["main", "planner"] } },
-        entries: { main: {}, planner: {} },
-      },
-    };
-    const description = createTool({ config, inheritedToolPolicySource: "sender" }).description;
-    expect(description).toContain(
-      "Sender policy allows only hidden helpers of the requester agent",
-    );
-    expect(description).toContain('With runtime="acp": No ACP harness id is allowed.');
-    expect(description).not.toContain("Configured agent to target");
-    expect(description).toContain(
-      'tools.swarm.defaultAgentId ("planner") is not an allowed target',
-    );
-  });
-
-  it("applies requester target policy to sender-restricted top-level ACP guidance", () => {
+  it("applies sender restrictions and requester policy to native and ACP guidance", () => {
     registerAcpBackendForTest();
     const config = {
       acp: { defaultAgent: "main", allowedAgents: ["main"] },
-      agents: { entries: { main: { subagents: { requireAgentId: true } } } },
+      agents: { entries: { main: { subagents: { requireAgentId: true } }, planner: {} } },
     };
     const description = createTool({
       config,
@@ -259,7 +238,15 @@ export function registerSessionsSpawnInputTests({
       inheritedToolPolicySource: "sender",
     }).description;
     expect(description).toContain(
+      'With runtime="subagent" (default): Sender policy allows only hidden helpers of the requester agent',
+    );
+    expect(description).toContain(
       'With runtime="acp": ACP harness id from: main. agentId is required.',
     );
+  });
+
+  it("adds no agentId guidance for a lone agent without ACP", () => {
+    const tool = createTool({ config: { agents: { entries: { main: {} } } } });
+    expect(tool.description).not.toContain("`agentId` targets:");
   });
 }
