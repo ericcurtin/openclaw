@@ -419,6 +419,26 @@ model as a fallback for when llmman itself is down:
 }
 ```
 
+A pair also works as the fallback for a large-context primary. A long session
+that fails over to a plain local model overflows its window. With a pair, set
+the entry's `contextWindow` to the hosted model's window: OpenClaw does not
+compact to the local limit, and llmman sends requests too large for the local
+context to the hosted half. Use a hosted half from a different provider than
+the primary.
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: {
+        primary: "anthropic/claude-sonnet-4-6",
+        fallbacks: ["llmman/llmman.hybrid/qwen3.8,openai/gpt-5.6-luna"],
+      },
+    },
+  },
+}
+```
+
 ### Hosted models through llmman
 
 `llmman.provider/<provider>/<model>` forwards to a hosted provider with no
