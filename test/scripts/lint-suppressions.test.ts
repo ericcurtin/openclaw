@@ -158,10 +158,16 @@ describe("production lint suppressions", () => {
         "scripts/perf/diagnostic-profile-measure.ts|typescript/unbound-method|1",
         // Node BroadcastChannel.postMessage has no target-origin parameter.
         "scripts/perf/idle-gateway-measure-preload.mjs|unicorn/require-post-message-target-origin|1",
+        // The size-record probe forwards Map.set with the original map receiver.
+        "scripts/perf/model-prompt-stats-measure.ts|typescript/unbound-method|1",
         // The provider probe forwards native methods with their original receivers.
         "scripts/perf/provider-request-prepare-measure.ts|typescript/unbound-method|3",
+        // The setup probe executes an expression from the same trusted source input it imports.
+        "scripts/perf/session-history-reader-setup-measure.mjs|typescript/no-implied-eval|1",
         // The subscription probe forwards track with the original AsyncWorkScope receiver.
         "scripts/perf/session-pr-subscriptions-measure.ts|typescript/unbound-method|1",
+        // The registry-copy probe forwards Map.set with the original map receiver.
+        "scripts/perf/subagent-maintenance-capture-measure.ts|typescript/unbound-method|1",
         "src/agents/agent-bundle-mcp-runtime.ts|unicorn/prefer-add-event-listener|1",
         "src/agents/agent-tools.abort.ts|typescript/prefer-promise-reject-errors|1",
         "src/agents/auth-profiles/oauth-refresh-fence.ts|preserve-caught-error|1",
@@ -189,6 +195,8 @@ describe("production lint suppressions", () => {
         "src/config/zod-schema.channel-messaging-common.ts|typescript/no-generated-empty-object-type|1",
         // Command declarations compare their stored JSON shape, where undefined properties are omitted.
         "src/cron/store/job-mutations.ts|unicorn/prefer-structured-clone|1",
+        // Task lineage traversal sorts its invocation-private result without another array copy.
+        "src/gateway/control-ui-session-task-prs.ts|unicorn/no-array-sort|1",
         // Pinned Bun HTTP sockets omit Writable._writev; this probe selects native or one-copy batching.
         "src/gateway/server/ws-transport.ts|no-underscore-dangle|1",
         "src/hooks/module-loader.ts|typescript/no-unnecessary-type-parameters|1",
@@ -253,6 +261,8 @@ describe("production lint suppressions", () => {
         "ui/src/app/native-gateway-auth.ts|unicorn/prefer-add-event-listener|1",
         "ui/src/app/native-gateway-auth.ts|unicorn/require-post-message-target-origin|2",
         "ui/src/components/mascot-canvas.ts|unicorn/no-array-fill-with-reference-type|1",
+        // A bridge renderer keeps the same native host for its complete lifetime.
+        "ui/src/components/session-background.tsx|solid/reactivity|1",
         "ui/src/components/session-progress-card.test-support.tsx|no-underscore-dangle|2",
         // These Solid sinks consume HTML sanitized or escaped by their content owners.
         "ui/src/components/solid/markdown-html.tsx|solid/no-innerhtml|1",

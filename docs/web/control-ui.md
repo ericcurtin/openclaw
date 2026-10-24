@@ -22,6 +22,12 @@ For unmatched HTTP paths, the app-shell fallback respects the request's `Accept`
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
+Optional surfaces follow the permissions granted to the current connection.
+Session-only roles do not load the plugin UI catalog, Side Chat history, observer
+visibility, or remote session-link titles. Side Chat is hidden, and session links
+keep their locally available labels. MCP Apps discovery requires general write
+access. The Gateway continues to authorize every request.
+
 ## Command palette file attachments
 
 Open the command palette with **Cmd+K** on macOS or **Ctrl+K** elsewhere. Drop
@@ -87,7 +93,7 @@ If the New Session page fails during its initial render, the UI attempts one aut
 
 Reloading a previously visited chat restores the last settled sidebar while the Gateway reconnects. Pinned sessions, plugin rows, roster order, filters, and your display identity keep their places until live data is ready. The footer still reports the current connection status. This browser cache is scoped to the Gateway and profile, expires after 30 days, and excludes incognito sessions. The same snapshot provides the saved session rows and routing defaults for the first chat header. Cached rows never authorize session changes. Sidebar snapshot capture coalesces live updates during idle time and flushes pending changes when the page is hidden or left.
 
-A short transcript loads at most one older page automatically when you open or reload a chat. It stops once the visible area is filled, without filling the backscroll buffer. Scroll up or choose **Show earlier** to continue loading older messages, even if the transcript still fits on screen.
+A short transcript loads at most one older page automatically when you open or reload a chat. It stops once the visible area is filled, without filling the backscroll buffer. Scroll up or choose **Show earlier** to continue loading older messages, even if the transcript still fits on screen. While older messages load, **Show earlier** keeps keyboard focus and ignores repeated activation.
 
 GitHub item URLs and repository-qualified references such as `owner/repo#126` render as compact links. Use `PR owner/repo#126` for a pull request or `issue owner/repo#126` for an issue. References identified by keywords, such as `PR #126`, remain plain text without a repository qualifier. Project display names, the checkout, the project catalog, and other messages do not supply a destination. A standalone hash token that is also a valid hexadecimal color, such as `#126`, retains its color preview without a GitHub link.
 
@@ -184,6 +190,11 @@ Provider speed observations are tracked separately for each requested tier. Repe
 
 Metadata refreshes wait for an in-progress model-runtime replacement to publish. An agent whose model runtime is unavailable does not interrupt commands or model choices for healthy agents; its metadata becomes available when its owner publishes.
 
+The model picker searches across the full catalog, including models under collapsed
+providers and **All models**. Use the Up and Down arrow keys in the search field to
+move through results and Enter to select one. Large catalogs keep the same search
+and keyboard behavior while rendering only the visible portion of the list.
+
 New Session keeps previously fetched model choices selectable while their catalog
 refreshes in the background. Before the first catalog arrives, it does not turn a
 configured default into a model option. Command palette model results use the same
@@ -193,7 +204,7 @@ Provider authentication status is shared across views and refreshes after accoun
 
 The sidebar loads automation status once per connection and refreshes after automation or configuration changes. Failed reads retry once per minute while the tab is visible and stop retrying after success. Sidebar health and Automations page refreshes pause during announced restarts or suspension and catch up when the Gateway is available again. Overdue warnings advance on a local deadline without polling the Gateway. Hidden tabs catch up when visible; returning to an unchanged tab does not poll automations. Command palette searches reuse their automation inventory on the same connection until one of those changes or a reconnect.
 
-In a session’s menu, open **View → Speech bubbles** to switch that conversation—including the main session—to two-sided bubbles. Your messages stay on the right and agent replies stream into bubbles on the left. The choice is saved per session in this browser; other sessions keep their own mode. Turn it off to restore the flat reply layout. In bubble mode, activity appears as a compact **…** preview. Click it to see the full tool or status details. Agent reactions appear beneath the prompt they acknowledge, independently of the selected layout.
+In a session’s menu, open **View → Speech bubbles** to switch that conversation—including the main session—to two-sided bubbles. Your messages stay on the right and agent replies stream into bubbles on the left. The choice is saved per session in this browser; other sessions keep their own mode. Turn it off to restore the flat reply layout. In bubble mode, ordinary waiting appears only as **…**, without a status phrase or timer. Active work uses one compact bubble with its recorded purpose; parallel tasks share one bubble that expands into their current activity and session links. Click a work bubble to inspect its tool details. Approval and retry states remain visible, and finished work leaves an expandable receipt instead of animated dots. Agent reactions appear beneath the prompt they acknowledge, independently of the selected layout.
 
 Automation inputs appear as compact, collapsed activity rows instead of message bubbles. Expand a row to read the full prompt and access its message actions. Each automation input stays separate, even when several jobs run in the same conversation. The expanded **From** link opens that automation's History tab and highlights the originating run; open the run's transcript from History when needed.
 
@@ -202,7 +213,9 @@ Thinking, speed, and context-window changes stay synchronized across panes showi
 While an agent works, completed commentary or preambles appear inline in the
 conversation when the model and runtime provide them. Narration keeps its
 formatting and position alongside tool activity; the working indicator remains
-a separate status for execution, startup, or approval. **Keep commentary** in
+a separate status for execution, startup, or approval. After a session is idle,
+a new run starts its own Working timer, including when it starts outside the
+Dashboard; earlier tool activity remains in the conversation. **Keep commentary** in
 the chat view menu controls whether commentary stays visible after the run,
 not whether the active run’s narration survives a history refresh. Completed
 dashboard turns collapse their narration and tool activity under **Worked for …**
@@ -276,7 +289,7 @@ with the call count. When only part of a long history is loaded, the count is a
 lower bound such as **40+ calls**. Avatar-free child transcripts do not reserve
 empty avatar columns, and narrow panes use compact horizontal insets while wide
 transcripts retain the reading-width limit. It does not add rows to the left
-sidebar. The parallel-tasks view also shows aggregate swarm progress. A directly
+sidebar. Delegated tasks appear inline with the turn that launched them, not above the composer. Batches of up to five tasks use a compact expandable row; larger active batches expand with progress and task details. Collected results stay with that turn after completion. A directly
 opened child page offers **Open parent session**. The `/subagents list`,
 `/subagents info <id|#>`, and `/subagents log <id|#>` commands remain available.
 
@@ -336,6 +349,10 @@ Chat filename links first try the named path. If a bare filename is missing ther
 the preview opens a nested file only when a complete workspace search finds exactly
 one matching filename. Ambiguous or incomplete searches keep the missing-file error;
 use an explicit path to select the intended file.
+
+Opening a file collapses the file tree to make room for its preview. Use **Toggle
+file tree** to browse another file, or **Show in Files** to reveal the current file
+in its folder with the **All** filter.
 
 If the **Files** panel shows a listing error, select **Retry** to load the current
 folder or search again. This keeps the session and query in place; access checks
