@@ -17,10 +17,11 @@ openclaw-assistant-panel {
 
 .assistant-panel--bottom,
 .assistant-panel--right {
-  right: calc(
+  --assistant-panel-reserve-right: calc(
     var(--oc-terminal-reserve-right, 0px) + var(--oc-browser-reserve-right, 0px) +
       var(--oc-link-reader-reserve-right, 0px)
   );
+  right: var(--assistant-panel-reserve-right);
   bottom: calc(
     var(--oc-terminal-reserve-bottom, 0px) + var(--oc-browser-reserve-bottom, 0px) +
       var(--oc-link-reader-reserve-bottom, 0px)
@@ -33,6 +34,20 @@ openclaw-assistant-panel {
 
 .assistant-panel--right {
   top: var(--shell-topbar-height, 0);
+}
+
+/* Without a topbar, Linux and Windows caption buttons cover this header's trailing
+   corner unless another dock sits between the panel and the window edge. */
+html.openclaw-native-desktop
+  .shell:not(.shell--mobile-nav)
+  .assistant-panel--right
+  .assistant-panel-header {
+  --rail-header-padding-end: max(
+    8px,
+    calc(
+      var(--openclaw-native-window-controls-width, 0px) + 8px - var(--assistant-panel-reserve-right)
+    )
+  );
 }
 
 .assistant-panel-resizer {

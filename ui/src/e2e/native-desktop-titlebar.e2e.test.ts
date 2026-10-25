@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   dockChatSidePanel,
   focusChatSidePanel,
@@ -271,6 +271,44 @@ async function keepsWindowControlsClear(page: Page, platform: "linux" | "windows
   await namedButton(caption, "Minimize window").click({ trial: true });
 }
 
+async function keepsHomePanelClear(page: Page, platform: "linux" | "windows") {
+  await installWindowChrome(page, platform);
+  await page.addInitScript(() =>
+    localStorage.setItem(
+      "openclaw.custodian.panel.v1",
+      JSON.stringify({ open: false, dock: "right", height: 360, width: 440 }),
+    ),
+  );
+  const sessionKey = "agent:main:work";
+  await installMockGateway(page, {
+    sessionKey,
+    featureMethods: ["chat.metadata", "chat.startup", "chat.history", "chat.send"],
+  });
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+  await page.locator(".sidebar-footer-bar__home").click();
+  const actions = page.locator(".assistant-panel-header .assistant-panel-actions button");
+  await actions.first().waitFor();
+  const caption = page.locator(".openclaw-window-controls");
+  await caption.waitFor();
+  const captionBox = (await caption.boundingBox())!;
+  for (const action of await actions.all()) {
+    const box = (await action.boundingBox())!;
+    expect(box.x + box.width).toBeLessThanOrEqual(captionBox.x);
+    await action.click({ trial: true });
+  }
+  // A dock between the panel and the window edge already clears the caption buttons.
+  await page.evaluate(() =>
+    document.documentElement.style.setProperty("--oc-terminal-reserve-right", "520px"),
+  );
+  await expect
+    .poll(async () => {
+      const panel = (await page.locator(".assistant-panel").boundingBox())!;
+      const last = (await actions.last().boundingBox())!;
+      return panel.x + panel.width - (last.x + last.width);
+    })
+    .toBe(8);
+}
+
 async function alignsNativeHeaders(
   page: Page,
   host: "web" | "macos" | "tauri-linux" | "tauri-macos",
@@ -438,6 +476,13 @@ suite.define(() => {
       { viewport: { width, height: 900 }, locale: "en-US", serviceWorkers: "block" },
       ({ page }) => keepsWindowControlsClear(page, platform, width),
     ),
+  );
+  it.each(["linux", "windows"] as const)(
+    "keeps the right-docked Home panel actions clear of %s window controls",
+    (platform) =>
+      suite.withPage({ viewport: { width: 1280, height: 900 }, locale: "en-US" }, ({ page }) =>
+        keepsHomePanelClear(page, platform),
+      ),
   );
   it.each(["web", "macos", "tauri-linux", "tauri-macos"] as const)(
     "aligns the %s rail, panel header, and content history row",
