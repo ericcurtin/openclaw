@@ -75,30 +75,47 @@ export function findDirectiveCodePrefix(
   return end ? { end, checkedRawLength: source.length } : undefined;
 }
 
-/** Retain only literal directives whose Markdown ownership cannot change on append. */
+const stripDirectives = (text: string) => stripInlineDirectiveTagsForDisplay(text).text;
+
+/** A `[[` whose closing `]]` is not yet settled can still become a directive. */
+function hasUnsettledMarker(text: string, end: number): boolean {
+  const start = text.lastIndexOf("[[", end - 1);
+  if (start === -1) {
+    return false;
+  }
+  // Every directive form ends at the first `]` after its head, so a `]]` ends the question.
+  const close = text.indexOf("]", start + 2);
+  return close === -1 || close + 1 >= end;
+}
+
+/**
+ * Strip directives from the unsettled tail only. A stray `[[` that never closes keeps its
+ * tail parsed per delta; that rare shape costs what it did before checkpoints.
+ */
 export const inlineDirectiveDisplayTextFilter: TextFilter = {
-  transform: (text) => stripInlineDirectiveTagsForDisplay(text).text,
+  transform: stripDirectives,
   create: () => {
-    let prefix: StreamDirectiveCodePrefix | undefined;
     let hasMarker = false;
     let previousChar = "";
-    let delta = "";
     return createConditionalTextProjector(
-      (text) => {
-        const projected = stripInlineDirectiveTagsForDisplay(text).text;
-        prefix = projected === text ? findDirectiveCodePrefix(text, delta) : undefined;
-        return projected;
-      },
+      stripDirectives,
       (input) => {
-        delta = input.delta ?? input.text;
-        if ((previousChar + delta).includes("[[")) {
-          hasMarker = true;
-          prefix = undefined;
-        }
+        const delta = input.delta ?? input.text;
+        hasMarker ||= (previousChar + delta).includes("[[");
         if (delta) {
           previousChar = delta.slice(-1);
         }
-        return hasMarker && !prefix;
+        return hasMarker;
+      },
+      (text, boundary, context) => {
+        const safe = boundary > context.contentStart && !hasUnsettledMarker(text, boundary);
+        return {
+          text: stripDirectives(text),
+          retainStart: safe ? boundary : context.contentStart,
+          retainedOutputStart: safe
+            ? stripDirectives(text.slice(0, boundary)).length
+            : context.contentStart,
+        };
       },
     );
   },

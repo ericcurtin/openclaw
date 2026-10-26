@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import * as markdownRegions from "../../packages/markdown-core/src/markdown-code-regions.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -890,6 +891,22 @@ describe("assistant text projection", () => {
     expect(parsedChars).toBeLessThan((run.rawBuffer?.length ?? 0) * 4);
   });
 
+  it("bounds parsing of growing prose directives", () => {
+    const regions = vi.spyOn(markdownRegions, "findMarkdownCodeRegions");
+    const ownership = vi.spyOn(codeRegions, "findCodeOwnership");
+    const run = state.getOrCreate("reply");
+    const head = "[[reply_to_current]] See [[Architecture Notes]] first.\n\n";
+    const visible = " See [[Architecture Notes]] first.\n\n";
+    const paragraph = "Ordinary prose keeps streaming with enough words to wrap.\n\n";
+    expectUpdate({ delta: head }, visible);
+    for (let index = 1; index <= 100; index++) {
+      expectUpdate({ delta: paragraph }, visible + paragraph.repeat(index));
+    }
+    const calls = [...regions.mock.calls, ...ownership.mock.calls];
+    const parsedChars = calls.reduce((total, [text]) => total + text.length, 0);
+    expect(parsedChars).toBeLessThan((run.rawBuffer?.length ?? 0) * 4);
+  });
+
   it("bounds code-point reads across consecutive messages", () => {
     const codePointAt = vi.spyOn(String.prototype, "codePointAt");
     const messages = 4;
@@ -936,6 +953,11 @@ describe("assistant text projection", () => {
       name: "directive across append boundary",
       frames: [`${directive}\n\nNext [`, `${directive}\n\nNext [[reply_to_current]] after`],
       visible: [`${directive}\n\nNext`, `${directive}\n\nNext  after`],
+    },
+    {
+      name: "directive across a blank line",
+      frames: ["One [[reply_to:\n\n\nx", "One [[reply_to:\n\n\nxabc]] after"],
+      visible: ["One", "One  after"],
     },
     {
       name: "replacement",
