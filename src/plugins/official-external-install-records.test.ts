@@ -3,7 +3,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
   isCommunityClawHubInstallRecord,
   isOfficialCatalogLookupPluginIdReplacement as isReplacement,
-  isThirdPartyNpmInstallRecord,
+  isThirdPartyNpmInstallRecord as isThirdParty,
   isTrustedOfficialCatalogLookupDuplicate as isDuplicate,
   isTrustedOfficialPluginInstallRecord as isTrusted,
   resolveTrustedSourceLinkedOfficialClawHubInstall as resolveClawHub,
@@ -71,9 +71,12 @@ describe("official plugin install trust", () => {
     { sourcePath: "/tmp/official" },
     { source: "path" },
   ] satisfies Partial<PluginInstallRecord>[])(
-    "rejects unsupported npm provenance %j",
+    "rejects invalid official and third-party npm provenance %j",
     (override) => {
       expect(trusts({ ...npmRecord, ...override })).toBe(false);
+      expect(
+        isThirdParty("demo", "@vendor/demo", npmInstall("@vendor/demo", "1.0.0", override)),
+      ).toBe(false);
     },
   );
 
@@ -147,33 +150,12 @@ describe("community ClawHub install records", () => {
   });
 });
 
-describe("third-party npm install identity", () => {
-  it.each([
-    { resolvedName: "@vendor/other" },
-    { resolvedSpec: "@vendor/other@1.0.0" },
-    { clawhubPackage: "@vendor/other" },
-    { spec: "file:/tmp/plugin.tgz" },
-    { artifactKind: "npm-pack" },
-    { sourcePath: "/tmp/plugin" },
-    { source: "clawhub" },
-  ] satisfies Partial<PluginInstallRecord>[])(
-    "rejects conflicting or local evidence %j",
-    (override) => {
-      expect(
-        isThirdPartyNpmInstallRecord(
-          "demo",
-          "@vendor/demo",
-          npmInstall("@vendor/demo", "1.0.0", override),
-        ),
-      ).toBe(false);
-    },
-  );
-});
-
 describe("trusted official npm install records", () => {
   it("preserves canonical official updates for resolved-spec-only evidence", () => {
     const record: PluginInstallRecord = { source: "npm", resolvedSpec: "@openclaw/acpx@2026.7.2" };
     expect(resolveNpm({ pluginId: "acpx", record })?.npmSpec).toBe("@openclaw/acpx");
+    record.resolvedSpec = "@synthetic/unrelated@1.0.0";
+    expect(resolveNpm({ pluginId: "acpx", record })).toBeUndefined();
   });
 
   it("returns a replacement only for a catalog-declared legacy id", () => {
