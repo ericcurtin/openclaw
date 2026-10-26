@@ -1,6 +1,6 @@
 export * from "./directive-tags-batch.js";
 export {
   findDirectiveCodePrefix,
-  inlineDirectiveDisplayTextFilter,
+  inlineDirectiveDisplayTextFilters,
   type StreamDirectiveCodePrefix,
 } from "./directive-tags-stream.js";

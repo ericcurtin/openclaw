@@ -1,6 +1,6 @@
 import { findCodeOwnership } from "../shared/text/code-regions.js";
-import { createConditionalTextProjector, type TextFilter } from "../shared/text/text-projection.js";
-import { stripInlineDirectiveTagsForDisplay } from "./directive-tags-batch.js";
+import type { TextFilter } from "../shared/text/text-projection.js";
+import { stripAudioTagsForDisplay, stripReplyTagsForDisplay } from "./directive-tags-batch.js";
 
 /** Raw offsets for literal directives whose Markdown code ownership is settled. */
 export type StreamDirectiveCodePrefix = {
@@ -75,8 +75,6 @@ export function findDirectiveCodePrefix(
   return end ? { end, checkedRawLength: source.length } : undefined;
 }
 
-const stripDirectives = (text: string) => stripInlineDirectiveTagsForDisplay(text).text;
-
 /** A `[[` whose closing `]]` is not yet settled can still become a directive. */
 function hasUnsettledMarker(text: string, end: number): boolean {
   const start = text.lastIndexOf("[[", end - 1);
@@ -88,35 +86,28 @@ function hasUnsettledMarker(text: string, end: number): boolean {
   return close === -1 || close + 1 >= end;
 }
 
-/**
- * Strip directives from the unsettled tail only. A stray `[[` that never closes keeps its
- * tail parsed per delta; that rare shape costs what it did before checkpoints.
- */
-export const inlineDirectiveDisplayTextFilter: TextFilter = {
-  transform: stripDirectives,
-  create: () => {
-    let hasMarker = false;
-    let previousChar = "";
-    return createConditionalTextProjector(
-      stripDirectives,
-      (input) => {
-        const delta = input.delta ?? input.text;
-        hasMarker ||= (previousChar + delta).includes("[[");
-        if (delta) {
-          previousChar = delta.slice(-1);
-        }
-        return hasMarker;
-      },
-      (text, boundary, context) => {
-        const safe = boundary > context.contentStart && !hasUnsettledMarker(text, boundary);
-        return {
-          text: stripDirectives(text),
-          retainStart: safe ? boundary : context.contentStart,
-          retainedOutputStart: safe
-            ? stripDirectives(text.slice(0, boundary)).length
-            : context.contentStart,
-        };
-      },
-    );
+/** Strip from the unsettled tail only; a stray `[[` that never closes is parsed per delta. */
+const settleAtCheckpoint =
+  (strip: (text: string) => string): NonNullable<TextFilter["checkpoint"]> =>
+  (text, boundary, context) => {
+    const safe = boundary > context.contentStart && !hasUnsettledMarker(text, boundary);
+    return {
+      text: strip(text),
+      retainStart: safe ? boundary : context.contentStart,
+      retainedOutputStart: safe ? strip(text.slice(0, boundary)).length : context.contentStart,
+    };
+  };
+
+/** Chain order is canonical: audio tags go first and can expose code that owns reply tags. */
+export const inlineDirectiveDisplayTextFilters: readonly TextFilter[] = [
+  {
+    transform: stripAudioTagsForDisplay,
+    activationTokens: ["audio_as_voice"],
+    checkpoint: settleAtCheckpoint(stripAudioTagsForDisplay),
   },
-};
+  {
+    transform: stripReplyTagsForDisplay,
+    activationTokens: ["[["],
+    checkpoint: settleAtCheckpoint(stripReplyTagsForDisplay),
+  },
+];
