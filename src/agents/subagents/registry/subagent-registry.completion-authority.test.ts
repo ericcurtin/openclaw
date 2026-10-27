@@ -11,14 +11,22 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../../../gateway/agent-runtime-approval-authority.js";
 import { callGateway } from "../../../gateway/call.js";
 import * as operatorCapture from "../../../gateway/operator-run-authority.js";
+import type { GatewayRequestHandlerOptions } from "../../../gateway/server-methods/types.js";
+import { dispatchGatewayMethodInProcessRaw } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import {
   createContext,
   createOperatorClient,
 } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
+import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
 import { bindGatewayLifecycleRequest } from "../../../gateway/server-recovery-runtime-context.js";
 import { onAgentEvent, rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+} from "../../../infra/agent-run-registry.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../../plugins/runtime.js";
 import {
@@ -34,6 +42,8 @@ import {
   createTestRegistry,
 } from "../../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { createEnteredGate } from "../../entered-gate.test-support.js";
+import { createOperationalRunInstanceRef } from "../../operational-run-instance.js";
 import { setSubagentAnnounceDeliveryDepsForTest } from "../announce/subagent-announce-overrides.test-support.js";
 import * as announce from "../announce/subagent-announce.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -41,7 +51,11 @@ import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
-import { registerCompletedFollowupAuthorityTests } from "./subagent-registry.completed-followup-authority.test-support.js";
+import {
+  operatorFixture,
+  retainedOperatorFixture,
+  registerCompletedFollowupAuthorityTests,
+} from "./subagent-registry.completed-followup-authority.test-support.js";
 import {
   adoptSubagentRunForRequesterTurn,
   registerSubagentRun,
@@ -127,32 +141,6 @@ function registration(
     expectsCompletionMessage: true,
     ...overrides,
   };
-}
-
-function operatorFixture(profileName: string, attachAccess = true) {
-  const context = createContext();
-  const resolveGatewayContext = () => context;
-  context.resolveGatewayContext = resolveGatewayContext;
-  const client = createOperatorClient({ profileName, scopes: ["operator.write"] });
-  const revoked = new AbortController();
-  const sourceAuthority = {
-    signal: revoked.signal,
-    assertCurrent: () => revoked.signal.throwIfAborted(),
-  };
-  if (attachAccess) {
-    client.internal = { operatorAccessAuthority: sourceAuthority };
-  }
-  return { context, resolveGatewayContext, client, revoked, sourceAuthority };
-}
-
-async function retainedOperatorFixture(profileName: string) {
-  const fixture = operatorFixture(profileName, false);
-  const source = expectDefined(
-    await operatorCapture.captureGatewayOperatorRunAuthority(fixture),
-    "operator registration source",
-  );
-  fixture.client.internal = { operatorRunAuthority: source.authority };
-  return { ...fixture, source };
 }
 
 beforeEach(() => {
@@ -244,12 +232,11 @@ describe("registered completion source custody", () => {
               },
             ),
           );
-          await Promise.race([
+          await awaitGateBeforeSettlement(
             entered.promise,
-            pending.then(() => {
-              throw new Error("Registration completed without entering worker persistence");
-            }),
-          ]);
+            pending,
+            "Registration completed without entering worker persistence",
+          );
           expect(subagentRuns.has(runId)).toBe(false);
           expect(callGateway).not.toHaveBeenCalled();
           current = transition !== "before commit";
@@ -345,12 +332,11 @@ describe("registered completion source custody", () => {
         (error: unknown) => ({ error }),
       );
       try {
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           entered.promise,
-          outcome.then(() => {
-            throw new Error("Registration did not reach its native ACK gate");
-          }),
-        ]);
+          outcome,
+          "Registration did not reach its native ACK gate",
+        );
         expect(loadSubagentRegistryFromSqlite().has(params.runId)).toBe(true);
         expect(subagentRuns.has(params.runId)).toBe(false);
         revoked.abort(new Error("operator source revoked after commit"));
@@ -413,8 +399,7 @@ describe("registered completion source custody", () => {
         const { context, client, revoked } = operatorFixture("registered-final-delivery");
         context.getRuntimeConfig = () => cfg;
         const terminal = createDeferredCore<unknown>();
-        const beforeSend = createDeferredCore();
-        const releaseSend = createDeferredCore();
+        const sendGate = createEnteredGate();
         const flowCompleted = createDeferredCore<announce.SubagentAnnounceFlowOutcome>();
         let announcement: ReturnType<typeof announce.runSubagentAnnounceFlow> | undefined;
         const actualAnnounce = announce.runSubagentAnnounceFlow;
@@ -442,10 +427,7 @@ describe("registered completion source custody", () => {
             id: "discord",
             send: {
               lifecycle: {
-                beforeSendAttempt: async () => {
-                  beforeSend.resolve();
-                  await releaseSend.promise;
-                },
+                beforeSendAttempt: sendGate.wait,
               },
               text: sendText,
             },
@@ -506,7 +488,7 @@ describe("registered completion source custody", () => {
           });
           await withinTest(
             awaitGateBeforeSettlement(
-              beforeSend.promise,
+              sendGate.entered,
               flowCompleted.promise,
               "Registered completion did not reach its final outbound adapter",
             ),
@@ -517,7 +499,7 @@ describe("registered completion source custody", () => {
           if (authority === "revoked") {
             revoked.abort(new Error("registered completion operator revoked"));
           }
-          releaseSend.resolve();
+          sendGate.release();
           await withinTest(flowCompleted.promise, signal);
           await settleSubagentRegistryPersistenceWork(() => settleRoots(true));
           const stored = expectDefined(
@@ -534,7 +516,7 @@ describe("registered completion source custody", () => {
           failures.push(error);
         } finally {
           terminal.resolve({ status: "pending" });
-          releaseSend.resolve();
+          sendGate.release();
           const settled = await Promise.allSettled([announcement]);
           failures.push(
             ...settled.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
@@ -557,6 +539,118 @@ describe("registered completion source custody", () => {
   );
 
   registerRequesterCompletionCustodyTests({ registration, updateRun });
+
+  it.each([
+    "completed System parent",
+    "missing System custody",
+    "revoked System custody",
+    "mixed System scopes",
+  ] as const)("preserves registered completion authority for %s", async (scenario) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const cfg = useConfig({ session: { store: state.path("sessions.json") } });
+      const requesterSessionKey = "agent:main:main";
+      const handler = ({ client, respond }: GatewayRequestHandlerOptions) => {
+        respond(true, {
+          scopes: client?.connect.scopes,
+          runtime: client?.internal?.agentRuntimeIdentity,
+        });
+      };
+      const validateRuntime = createAgentRuntimeApprovalAuthorityValidator();
+      const createSource = () => {
+        const context = createContext([["agent", "operator.write", "agent", handler]]);
+        const resolveGatewayContext = () => context;
+        context.resolveGatewayContext = resolveGatewayContext;
+        context.getRuntimeConfig = () => cfg;
+        context.validateAgentRuntimeApprovalAuthority = validateRuntime;
+        return { context, resolveGatewayContext };
+      };
+      const source = createSource();
+      const siblingSource = scenario === "revoked System custody" ? createSource() : source;
+      const operationalRunInstance = createOperationalRunInstanceRef("system-completion-parent");
+      const delegatedAuthority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+      onTestFinished(() => void releaseAgentRunDelegatedAuthority(delegatedAuthority));
+      const client = createSyntheticPluginRuntimeClient({
+        scopes: ["operator.write"],
+        operatorRoleActor: { kind: "system" },
+      });
+      client.internal = {
+        ...client.internal,
+        agentRuntimeIdentity: {
+          kind: "agentRuntime",
+          agentId: "main",
+          sessionKey: requesterSessionKey,
+          operationalRunInstance,
+          delegatedAuthority: { kind: "local", ...delegatedAuthority },
+        },
+      };
+      for (const [runId, owner, scopes] of [
+        ["system-child", source, ["operator.write"]],
+        [
+          "system-sibling",
+          siblingSource,
+          scenario === "mixed System scopes"
+            ? ["operator.write", "operator.approvals"]
+            : ["operator.write"],
+        ],
+      ] as const) {
+        await inGateway(
+          {
+            client: { ...client, connect: { ...client.connect, scopes: [...scopes] } },
+            ...owner,
+          },
+          () =>
+            registerSubagentRun(
+              registration(runId, { gatewayContextResolver: owner.resolveGatewayContext }),
+            ),
+        );
+      }
+      const entry = expectDefined(subagentRuns.get("system-child"), "registered System child");
+      const sibling = expectDefined(
+        subagentRuns.get("system-sibling"),
+        "registered System sibling",
+      );
+      releaseAgentRunDelegatedAuthority(delegatedAuthority);
+      expect(validateRuntime(client.internal.agentRuntimeIdentity!)).toBe(false);
+      if (scenario === "missing System custody") {
+        subagentRuns.releaseCompletionAuthority(sibling);
+      } else if (scenario === "revoked System custody") {
+        getGatewayContextLifetime(siblingSource.resolveGatewayContext).abort();
+      }
+      const dispatch = vi.fn(() =>
+        dispatchGatewayMethodInProcessRaw(
+          "agent",
+          {
+            message: "Accepted child result",
+            sessionKey: requesterSessionKey,
+            idempotencyKey: "system-completion",
+          },
+          { syntheticScopeMode: "exact" },
+        ),
+      );
+      await inGateway({ ...source, client }, async () => {
+        if (scenario === "completed System parent") {
+          for (const deliver of [
+            () => subagentRuns.runWithCompletionAuthority(entry, dispatch),
+            () => subagentRuns.runWithCompletionBatchAuthority([entry, sibling], dispatch),
+          ]) {
+            await expect(deliver()).resolves.toMatchObject({
+              ok: true,
+              payload: { scopes: ["operator.write"], runtime: undefined },
+            });
+          }
+        } else {
+          expect(() =>
+            subagentRuns.runWithCompletionBatchAuthority([entry, sibling], dispatch),
+          ).toThrow(
+            scenario === "mixed System scopes"
+              ? "Subagent completion batch has incompatible operator authority"
+              : /Subagent completion authority is no longer active|Gateway continuation authority is no longer active/,
+          );
+          expect(dispatch).not.toHaveBeenCalled();
+        }
+      });
+    });
+  });
 
   it.each([
     "admission",

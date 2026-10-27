@@ -13,6 +13,7 @@ import { resolveStateDir } from "../state-dir.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import { resolveSessionLifecycleTimestampsWithHeader } from "./lifecycle-timestamps.js";
 import { matchesPluginHostCleanupSession } from "./plugin-host-cleanup.js";
+import { hasOrphanedMainSessionWork } from "./restart-recovery-state.js";
 import {
   assertMemoryExactReadSource,
   captureMemoryExactSessionReader,
@@ -46,11 +47,12 @@ import type {
   SessionStoreWorkerReadInput,
   SessionStoreWorkerReadScope,
   SessionEntryReadSourcePreparation,
+  SessionEntryCohortReadOptions,
   SessionEntryCohortReader,
+  SessionEntrySummaryWorkerRead,
 } from "./session-entry-read-runtime.types.js";
 import { assertCapturedSessionEntryReadSource } from "./session-entry-read-source.js";
 import type {
-  SessionEntryListWorkerInput,
   SessionEntryListWorkerResult,
   SessionEntryReadWorkerResult,
   SessionExactEntriesWorkerResult,
@@ -283,19 +285,15 @@ export function createSessionEntryListReader(
 }
 
 /** Read descriptive summaries through the original store selection and reader lifetime. */
-export async function readSessionEntrySummariesInWorker(
-  input: Omit<SessionStoreWorkerReadScope, "agentId"> &
-    Pick<
-      SessionEntryListWorkerInput["scope"],
-      "agentId" | "cleanupSession" | "mainSessionRecovery" | "readConsistency"
-    >,
-) {
+export async function readSessionEntrySummariesInWorker(input: SessionEntrySummaryWorkerRead) {
   const memory = captureMemoryExactSessionReader(input);
   if (memory) {
     // Incognito sessions have no durable restart work.
-    const entries = input.mainSessionRecovery ? [] : memory.entries("list");
-    return entries.filter(({ sessionKey, entry }) =>
-      matchesPluginHostCleanupSession(sessionKey, entry, input.cleanupSession),
+    const entries = input.mainSessionRecovery === "claims" ? [] : memory.entries("list");
+    return entries.filter(
+      ({ sessionKey, entry }) =>
+        matchesPluginHostCleanupSession(sessionKey, entry, input.cleanupSession) &&
+        (input.mainSessionRecovery !== "orphans" || hasOrphanedMainSessionWork(entry, sessionKey)),
     );
   }
   const { scope } = captureSessionEntryReadScope({ ...input, sessionKey: "" });
@@ -327,17 +325,10 @@ export async function readSessionEntrySummariesInWorker(
 export async function withSessionEntriesFromStoresInWorker<T>(
   inputs: readonly SessionEntryWorkerRead[],
   consume: (reads: readonly PreparedSessionEntryWorkerRead[]) => T,
-  options?: {
-    ordered?: boolean;
-    signal?: AbortSignal;
-    onReadAdmitted?: () => void;
-    prepareSource?: (
-      input: SessionEntryWorkerRead,
-      ...source: Parameters<SessionEntryReadSourcePreparation>
-    ) => void;
-  },
+  options?: SessionEntryCohortReadOptions,
 ): Promise<T> {
   options?.signal?.throwIfAborted();
+  const prepareConsume = options?.prepareConsume;
   const originalInputs = [...inputs];
   const capturedInputs: SessionEntryWorkerRead[] = originalInputs.map((input) => {
     const captured: SessionEntryWorkerRead = {
@@ -367,11 +358,12 @@ export async function withSessionEntriesFromStoresInWorker<T>(
           ),
         }),
       onReadAdmitted: options.onReadAdmitted,
+      prepareConsume,
       signal: options.signal,
     });
   }
   const reads: PreparedSessionEntryWorkerRead[] = [];
-  const enter = (index: number): Promise<T> => {
+  const enter = async (index: number): Promise<T> => {
     const input = capturedInputs[index];
     if (input) {
       return withSessionEntriesFromStoreInWorker(
@@ -390,6 +382,9 @@ export async function withSessionEntriesFromStoresInWorker<T>(
         options?.signal,
       );
     }
+    if (prepareConsume) {
+      await prepareConsume();
+    }
     options?.signal?.throwIfAborted();
     for (const read of reads) {
       read.assertCurrent();
@@ -399,7 +394,7 @@ export async function withSessionEntriesFromStoresInWorker<T>(
       void Promise.resolve(result).catch(() => {});
       throw new Error("Session entry read consumers must remain synchronous");
     }
-    return Promise.resolve(result);
+    return result;
   };
   return enter(0);
 }

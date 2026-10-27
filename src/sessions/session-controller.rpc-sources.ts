@@ -183,9 +183,13 @@ export function hasUnretiredRpcSource(
 
 /** Returns a stable snapshot for Gateway projection, shutdown, and abort iteration. */
 export function listRpcSourceEntries(): Array<[runId: string, ref: RpcSourceRef]> {
-  return [...rpcSourcesByRunId].flatMap(([runId, sources]) =>
-    [...sources].map((ref): [string, RpcSourceRef] => [runId, ref]),
-  );
+  const entries: Array<[string, RpcSourceRef]> = [];
+  for (const [runId, sources] of rpcSourcesByRunId) {
+    for (const ref of sources) {
+      entries.push([runId, ref]);
+    }
+  }
+  return entries;
 }
 
 /** Returns sources owned by the exact physical controller selected by a captured target. */
@@ -366,6 +370,7 @@ export function getRpcSourceStartedAt(ref: RpcSourceRef): number | undefined {
     : undefined;
 }
 
+/** @internal Exposed for unit tests only. */
 export function getRpcSourceExpiresAt(ref: RpcSourceRef): number | undefined {
   return ref.adapter.timing?.expiresAtMs;
 }
@@ -500,19 +505,6 @@ export function requestRpcSourceCancellation(
     reason,
     assertCurrent,
   }).abortedInputs.includes(ref.input);
-}
-
-export function isRpcSourceQueuedForSession(runId: string, scope: RpcSourceIdentity): boolean {
-  const matches = [...(rpcSourcesByRunId.get(runId) ?? [])].filter((ref) => {
-    const identity = getRpcSourceIdentity(ref);
-    return (
-      identity.sessionId === scope.sessionId &&
-      identity.sessionKey === scope.sessionKey &&
-      identity.agentId === scope.agentId
-    );
-  });
-  const ref = matches.length === 1 ? matches[0] : undefined;
-  return ref !== undefined && isRpcSourceQueued(ref) && isRpcSourceRegistered(ref);
 }
 
 /** Capture presentation correlation with exact inputs; no scheduler state is copied. */

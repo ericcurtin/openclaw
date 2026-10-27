@@ -21,8 +21,7 @@ import {
 } from "../../gateway/message-action-turn-capability.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { OutboundHandoffRejectedError } from "../../infra/outbound/deliver-handoff.js";
-import { runMessageAction } from "../../infra/outbound/message-action-runner.js";
-import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
+import * as messageActionRunner from "../../infra/outbound/message-action-runner.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -46,6 +45,7 @@ import { captureAgentPluginRuntimeRefresh } from "../plugin-runtime-refresh.js";
 import type { StreamFn } from "../runtime/index.js";
 import { AuthStorage } from "../sessions/auth-storage.js";
 import { ModelRegistry } from "../sessions/model-registry.js";
+import { createQueuedAssistantStream } from "../test-helpers/assistant-event-stream.test-support.js";
 import {
   buildEmbeddedRunnerAssistant,
   createEmbeddedAgentRunnerOpenAiConfig,
@@ -78,6 +78,8 @@ const plugin: ChannelPlugin = {
 };
 const registry = createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]);
 const transport = vi.fn();
+const runMessageAction = messageActionRunner.runMessageAction;
+let messageActionRunnerSpy: MockInstance<typeof runMessageAction> | undefined;
 const providerStream = vi.fn<StreamFn>();
 const messageTools: AnyAgentTool[] = [];
 const messageExecutions: MockInstance<AnyAgentTool["execute"]>[] = [];
@@ -165,26 +167,6 @@ vi.doMock("../tools/message-tool-execution.js", async () => {
   const actual = await vi.importActual<typeof import("../tools/message-tool-execution.js")>(
     "../tools/message-tool-execution.js",
   );
-  const options = (input?: MessageToolOptions): MessageToolOptions => ({
-    ...input,
-    runMessageAction: (action) =>
-      runMessageAction({
-        ...action,
-        gateway: {
-          request: transport,
-          terminalSourceReplyReceiptOwner: "caller",
-          clientName: "gateway-client",
-          mode: "backend",
-        },
-      }),
-    getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-    resolveCommandSecretRefsViaGateway: async ({ config: resolvedConfig }) => ({
-      resolvedConfig,
-      diagnostics: [],
-      targetStatesByPath: {},
-      hadUnresolvedTargets: false,
-    }),
-  });
   const record = (tool: AnyAgentTool) => {
     messageTools.push(tool);
     messageExecutions.push(vi.spyOn(tool, "execute"));
@@ -195,11 +177,11 @@ vi.doMock("../tools/message-tool-execution.js", async () => {
     ...actual,
     createMessageTool: (input?: MessageToolOptions) => {
       beforeBuildMessage();
-      return record(actual.createMessageTool(options(input)));
+      return record(actual.createMessageTool(input));
     },
     createMessageToolAsync: async (input?: MessageToolOptions) => {
       beforeBuildMessage();
-      return record(await actual.createMessageToolAsync(options(input)));
+      return record(await actual.createMessageToolAsync(input));
     },
   };
 });
@@ -228,6 +210,19 @@ beforeEach(async () => {
   events.length = 0;
   transport.mockReset();
   providerStream.mockReset();
+  messageActionRunnerSpy = vi
+    .spyOn(messageActionRunner, "runMessageAction")
+    .mockImplementation((action) =>
+      runMessageAction({
+        ...action,
+        gateway: {
+          request: transport,
+          terminalSourceReplyReceiptOwner: "caller",
+          clientName: "gateway-client",
+          mode: "backend",
+        },
+      }),
+    );
   setActivePluginRegistry(registry);
 });
 
@@ -238,7 +233,12 @@ afterEach(async () => {
     try {
       await disposeAllSessionMcpRuntimes();
     } finally {
-      await state?.cleanup();
+      try {
+        await state?.cleanup();
+      } finally {
+        messageActionRunnerSpy?.mockRestore();
+        messageActionRunnerSpy = undefined;
+      }
     }
   }
 });
@@ -468,12 +468,9 @@ describe("ordinary source reply across deferred plugin refresh", () => {
             : [{ type: "text", text: "The result." }],
           stopReason: call ? "toolUse" : "stop",
         });
-        const stream = createAssistantMessageEventStream();
-        queueMicrotask(() => {
-          stream.push({ type: "done", reason: call ? "toolUse" : "stop", message });
-          stream.end();
+        return createQueuedAssistantStream((push) => {
+          push({ type: "done", reason: call ? "toolUse" : "stop", message });
         });
-        return stream;
       });
 
       const abort = new AbortController();

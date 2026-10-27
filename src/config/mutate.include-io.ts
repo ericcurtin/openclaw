@@ -274,7 +274,6 @@ export async function writeRootBoundJsonFile(params: {
     ...pathProof,
     assertCurrent: () => {
       params.assertOwnerForRollback();
-      pathProof.assertCurrent();
       writeGuard.assertPublishedIdentity();
     },
     captureRollbackProof: () => writeGuard.captureRollbackProof(params.assertOwnerForRollback),
@@ -323,6 +322,7 @@ export async function writeRootBoundJsonFile(params: {
           env: params.env,
           configPath: params.configPath,
           expectedPending: params.deferredPluginMigrations,
+          phase: "config include publication",
         },
         publish,
       );

@@ -17,7 +17,7 @@ export function registerNativeDispatchAbortCases(
     dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
     getSessionControllerOperation: typeof import("../../sessions/session-controller.js").getSessionControllerOperation;
     createReplyOperation: typeof import("../../sessions/session-controller.js").createReplyOperation;
-    listActiveReplyRunSessionKeys: typeof import("../../sessions/session-controller.js").listActiveReplyRunSessionKeys;
+    listActiveReplyRunSessionKeys: typeof import("../../sessions/session-controller.queries.js").listActiveReplyRunSessionKeys;
     createDispatchConfig: (diagnostics?: boolean) => OpenClawConfig;
     expectNoReplies: (dispatcher: ReturnType<typeof createDispatcher>) => void;
   },
@@ -60,7 +60,7 @@ export function registerNativeDispatchAbortCases(
     });
     const origin = new AbortController();
     const cfg = createDispatchConfig();
-    const prepared = prepareReplySourceInput(ctx, cfg, { abortSignal: origin.signal });
+    const prepared = await prepareReplySourceInput(ctx, cfg, { abortSignal: origin.signal });
     if (!prepared.input) {
       throw new Error("missing native source");
     }

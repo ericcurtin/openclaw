@@ -50,7 +50,7 @@ export function captureSessionControllerInterruptBefore(
   return inputs.length ? captureSessionControllerStop({ inputs }) : undefined;
 }
 
-/** Captures the current direct owner for exact-instance interruption. */
+/** @internal Captures the current direct owner for exact-instance interruption; unit tests only. */
 export function captureCurrentSessionRunInterruptTarget(
   sessionKey: string,
 ): ReplyRunInterruptTarget | undefined {
@@ -94,7 +94,7 @@ export function supersedeReplyRunByRunId(runId: string, beforeCancel: () => void
     return stopSession({
       source: "supersede",
       capture: captureSessionControllerStop({ operations: [operation] }),
-      // Supersession owns heartbeat finalization semantics beyond ordinary abortability.
+      // Supersession preserves the selected operation’s finalization semantics.
       cancelOperation: (selected) => selected.supersede(beforeCancel),
     }).aborted;
   }
@@ -111,10 +111,7 @@ function hasReplyBackendStopped(runId: string, backend: ReplyBackendHandle | und
   }
 }
 
-export function abortReplyRunBySessionId(sessionId: string): boolean {
-  return resolveActiveReplyOperationForSessionId(sessionId)?.abortByUser() ?? false;
-}
-
+/** @internal Exposed for unit tests only. */
 export function clearReplyRunForResetBySessionId(sessionId: string): void {
   const operation = resolveActiveReplyOperationForSessionId(sessionId);
   if (!operation || isReplyOperationPreBackendPhase(operation.phase)) {

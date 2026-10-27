@@ -32,6 +32,7 @@ import {
   getAgentDeletionDatabaseCleanup,
 } from "./agent-deletion-cleanup.js";
 import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
+import { retainAgentDatabase } from "./openclaw-agent-db-borrower.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
@@ -42,7 +43,6 @@ import { assertOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identit
 import type { prepareOpenClawAgentDatabaseWorkerLease } from "./openclaw-agent-db-lease.js";
 import {
   agentDatabaseLifecycle as cache,
-  retainAgentDatabase,
   type PendingAgentDatabaseOpen,
 } from "./openclaw-agent-db-lifecycle.js";
 import { assertAgentDatabaseResourceAdmission } from "./openclaw-agent-db-resources.js";
@@ -158,20 +158,20 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
         registrationObserver,
         repairAdmission,
       );
+      const assertCurrent = () => {
+        repairAdmission?.assertCurrent?.();
+        if (preparedLease && !isMainThread) {
+          requestSqliteWorkerOperationAdmission({
+            stage: "prepare",
+            facts: { kind: "agent-open-resume", lease: preparedLease.receipt },
+          });
+        }
+      };
+      const repair = preparedLease?.startupRepair;
       return runSqliteIntegrityOperationSync(
         steps,
-        (preparedLease && !isMainThread) || repairAdmission?.assertCurrent
-          ? () =>
-              assertAgentDatabaseOpenAuthority(steps, () => {
-                repairAdmission?.assertCurrent?.();
-                if (preparedLease && !isMainThread) {
-                  requestSqliteWorkerOperationAdmission({
-                    stage: "prepare",
-                    facts: { kind: "agent-open-resume", lease: preparedLease.receipt },
-                  });
-                }
-              })
-          : undefined,
+        () => assertAgentDatabaseOpenAuthority(steps, assertCurrent),
+        repair && !isMainThread ? (check, error) => repair(check, error, assertCurrent) : undefined,
       );
     };
     const scope = getOpenClawDatabaseMaintenanceScope();

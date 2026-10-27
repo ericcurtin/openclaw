@@ -1,29 +1,26 @@
 import "./subagent-announce.requester-settle-dispatch-mocks.test-support.js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../../config/runtime-snapshot.js";
+import type { RestartRecoveryTerminalDeliveryEvidence } from "../../../config/sessions/restart-recovery-types.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
+import type { AgentTurnStartRequest } from "../../../gateway/agent-turn/agent-turn-start-request.types.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
 import { waitForGatewayDispatch } from "../../../gateway/server-in-process-dispatch.js";
-import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
-import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { withSessionTurn } from "../../../sessions/session-controller.admission.js";
-import {
-  captureSessionTarget,
-  getCurrentSessionControllerClaim,
-} from "../../../sessions/session-controller.lifecycle.js";
+import { getCurrentSessionControllerClaim } from "../../../sessions/session-controller.lifecycle.js";
 import { getExistingSessionControllerMailbox } from "../../../sessions/session-controller.mailbox.js";
 import { markReplyOperationExecutionStarted } from "../../../sessions/session-controller.state.js";
 import { rpcSourceTesting } from "../../../sessions/session-lifecycle-admission.test-support.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
 import { prepareEmbeddedAttemptTimeout } from "../../embedded-agent-runner/run/attempt-timeout-prepare.js";
+import { createEnteredGate } from "../../entered-gate.test-support.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import { consumeSubagentPauseNotice } from "../registry/subagent-delivery-state.js";
+import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
@@ -31,49 +28,353 @@ import {
   promoteRequesterFinalAttachment,
 } from "../requester-final-attachment.js";
 import { reserveRestoredSubagentControllerSources } from "./subagent-announce-controller-source.js";
-import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
 import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
 import {
   deliver,
   loadRequester,
   registryRead,
+  readDescendantFacts,
   startTurn,
   REQUESTER_KEY,
+  REQUESTER_TARGET,
+  REQUESTER_TURN,
   settledChild,
-  publishWakeTransition,
+  wakeParams,
+  requesterSnapshot,
+  useDirectDelivery,
+  withGateway,
   useRequesterSettleDispatchFixture,
+  finishProcessedCompletion,
   createRequesterSettleContext as createContext,
 } from "./subagent-announce.requester-settle-dispatch.test-support.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "./subagent-announce.requester-settle-wake.js";
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    for (const dir of tempDirs.dirs) {
-      await closeOpenClawAgentDatabasesAsync(dir);
-    }
-    cleanup();
-    clearRuntimeConfigSnapshot();
-  }),
-);
+afterEach(() => clearRuntimeConfigSnapshot());
 
-const REQUESTER_TARGET = captureSessionTarget({
-  storeScope: "/synthetic/requester-settle-dispatch/sessions.db",
-  sessionKey: REQUESTER_KEY,
-  incarnation: "requester-session",
-  agentId: "main",
-});
-const REQUESTER_TURN = {
-  target: REQUESTER_TARGET,
-  sessionKey: REQUESTER_KEY,
-  sessionId: "requester-session",
-  agentId: "main",
-};
+type Wake = Parameters<typeof maybeWakeRequesterAfterAllChildrenSettled>[0];
+function dispatchFixture(child = settledChild()) {
+  registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
+  const completeBatch = vi.fn<Wake["completeBatch"]>(() => {
+    child.requesterSettleWake = undefined;
+  });
+  return { child, completeBatch, params: wakeParams(child, completeBatch) };
+}
+
+function recoveryEvidence(
+  runId: string,
+  transcriptRunId: string,
+  failed = false,
+): RestartRecoveryTerminalDeliveryEvidence {
+  return {
+    runId,
+    transcriptRunId,
+    captured: true as const,
+    ...(failed
+      ? { meta: { error: true } }
+      : {
+          payloads: [{ visible: true }],
+          deliveryStatus: { status: "sent" as const, resultCount: 1 },
+        }),
+  };
+}
+type Turn = Pick<AgentTurnStartRequest, "preflight" | "io" | "controllerInput">;
+function acceptTurn({ preflight, io }: Turn, cached?: true) {
+  const runId = preflight.request.idempotencyKey;
+  io.emitAcceptance([true, { runId, status: "accepted" }, undefined], {
+    runId,
+    ...(cached ? { cached } : {}),
+  });
+}
+function finishTurn(io: Turn["io"], text: string | undefined) {
+  io.emitFinal([true, { status: "ok", result: { payloads: [{ text }] } }, undefined]);
+}
+function registerRequesterTurn({ preflight, controllerInput }: Turn, timeoutMs: number) {
+  return registerChatAbortController({
+    target: REQUESTER_TARGET,
+    runId: preflight.request.idempotencyKey,
+    sessionId: "requester-session",
+    sessionKey: preflight.request.sessionKey,
+    timeoutMs,
+    kind: "agent",
+    sourceInput: controllerInput,
+  });
+}
 
 describe("requester settle dispatch deadline", () => {
   useRequesterSettleDispatchFixture();
 
-  beforeEach(() => {
-    setRuntimeConfigSnapshot({});
+  beforeEach(() => setRuntimeConfigSnapshot({}));
+
+  it("does not reserve a foreground-blocking source for a wholly superseded yielded cohort", async () => {
+    const context = createContext();
+    const { child, completeBatch, params } = dispatchFixture();
+    child.killReconciliation = { killedAt: 3_000, supersededAt: 4_000 };
+    child.suppressCompletionDelivery = true;
+    child.requesterSettleWake = {
+      ...child.requesterSettleWake!,
+      status: "dispatching",
+      attemptCount: 1,
+      batchRunIds: [child.runId],
+    };
+    useDirectDelivery();
+    subagentRuns.set(child.runId, child);
+    onTestFinished(() => {
+      subagentRuns.delete(child.runId);
+    });
+
+    expect(await reserveRestoredSubagentControllerSources([child])).toEqual([]);
+    await expect(
+      withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params)),
+    ).resolves.toBe(false);
+    expect(startTurn).not.toHaveBeenCalled();
+    expect(completeBatch).toHaveBeenCalledWith([child], 1, undefined, expect.any(Function));
+    const foreground = vi.fn(async () => "foreground completed");
+    await expect(withSessionTurn(REQUESTER_TURN, foreground)).resolves.toBe("foreground completed");
+    expect(foreground).toHaveBeenCalledOnce();
+  });
+
+  it.each(["superseded sibling", "current killed child"] as const)(
+    "restores the same owed yielded cohort as dispatch with a %s",
+    async (scenario) => {
+      const context = createContext();
+      const child = settledChild();
+      child.delivery = { status: "pending" };
+      const obsolete: SubagentRunRecord = {
+        ...settledChild(),
+        runId: "superseded-child",
+        childSessionKey: "agent:main:subagent:superseded-child",
+        completion: {
+          ...settledChild().completion,
+          required: true,
+          resultText: "OBSOLETE-FINDING",
+        },
+        delivery: { status: "pending" },
+        suppressCompletionDelivery: true,
+        killReconciliation: { killedAt: 3_000, supersededAt: 4_000 },
+      };
+      const rows = scenario === "superseded sibling" ? [child, obsolete] : [child];
+      if (scenario === "current killed child") {
+        child.killReconciliation = { killedAt: 3_000 };
+        child.suppressCompletionDelivery = true;
+        child.endedReason = SUBAGENT_ENDED_REASON_KILLED;
+        child.execution.outcome = { status: "error", error: "synthetic cancellation" };
+      }
+      for (const row of rows) {
+        row.requesterSettleWake = {
+          ...row.requesterSettleWake!,
+          batchRunIds: rows.map((member) => member.runId).toSorted(),
+        };
+        subagentRuns.set(row.runId, row);
+        onTestFinished(() => {
+          subagentRuns.delete(row.runId);
+        });
+      }
+      registryRead.listSubagentRunsForRequester.mockReturnValue(rows);
+      const completeBatch = vi.fn<Wake["completeBatch"]>(
+        async (batch, _generation, _outcome, committed) => {
+          for (const row of batch) {
+            row.requesterSettleWake = undefined;
+          }
+          await committed?.();
+        },
+      );
+      const params = wakeParams(child, completeBatch);
+      const received: Array<{ message: string; runId: string }> = [];
+      startTurn.mockImplementation(async ({ controllerInput, preflight, io }) => {
+        acceptTurn({ controllerInput, preflight, io });
+        await withSessionTurn({ ...REQUESTER_TURN, controllerInput }, async () => {
+          io.emitExecutionStarted?.();
+          received.push({
+            message: preflight.request.message,
+            runId: preflight.request.idempotencyKey,
+          });
+        });
+        finishProcessedCompletion(io);
+      });
+      useDirectDelivery();
+
+      const restored = await reserveRestoredSubagentControllerSources(rows);
+      expect(restored).toHaveLength(1);
+      await expect(
+        withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params)),
+      ).resolves.toBe(true);
+      expect(received).toHaveLength(1);
+      expect(received[0]!.message).not.toContain("OBSOLETE-FINDING");
+      expect(received[0]!.message).toContain(
+        scenario === "superseded sibling" ? "child result" : "synthetic cancellation",
+      );
+      expect(received[0]!.runId).toBe(
+        scenario === "superseded sibling"
+          ? "announce:requester-settle:main:agent:main:main:settled-child,superseded-child:yield-1"
+          : "announce:requester-settle:main:agent:main:main:settled-child:yield-1",
+      );
+      expect(completeBatch).toHaveBeenCalledWith(
+        rows,
+        1,
+        expect.objectContaining({ delivered: true }),
+        expect.any(Function),
+      );
+      await expect(
+        withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params)),
+      ).resolves.toBe(false);
+      expect(startTurn).toHaveBeenCalledOnce();
+      const foreground = vi.fn(async () => "foreground completed");
+      await expect(withSessionTurn(REQUESTER_TURN, foreground)).resolves.toBe(
+        "foreground completed",
+      );
+      expect(foreground).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("does not dispatch findings whose child becomes superseded after preparation", async () => {
+    const context = createContext();
+    const { child, completeBatch, params } = dispatchFixture();
+    child.delivery = { status: "pending" };
+    child.requesterSettleWake!.batchRunIds = [child.runId];
+    const prepared = createDeferredCore();
+    const release = createDeferredCore();
+    readDescendantFacts
+      .mockImplementationOnce(async () => ({ unsettled: false, active: 0 }))
+      .mockImplementationOnce(async () => {
+        // This second read follows the real completion-findings preparation.
+        prepared.resolve();
+        await release.promise;
+        return { unsettled: false, active: 0 };
+      });
+    const transition = vi.fn(params.transitionBatch);
+    startTurn.mockImplementation(async ({ controllerInput, preflight, io }) => {
+      acceptTurn({ controllerInput, preflight, io });
+      await withSessionTurn({ ...REQUESTER_TURN, controllerInput }, async () => {
+        io.emitExecutionStarted?.();
+      });
+      finishProcessedCompletion(io);
+    });
+    useDirectDelivery();
+    const pending = withGateway(context, () =>
+      maybeWakeRequesterAfterAllChildrenSettled({ ...params, transitionBatch: transition }),
+    );
+    try {
+      await prepared.promise;
+      // Keep the same row owner and terminal outcome: only latest-execution custody changes.
+      child.killReconciliation = { killedAt: 3_000, supersededAt: 4_000 };
+      release.resolve();
+      await expect(pending).rejects.toThrow(
+        "Requester completion source changed before continuation admission.",
+      );
+      expect(startTurn).not.toHaveBeenCalled();
+      expect(transition).not.toHaveBeenCalled();
+      expect(completeBatch).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await pending.catch(() => {});
+    }
+  });
+
+  it.each([
+    { name: "all consumed, NO_REPLY", undelivered: false, silent: true },
+    { name: "all consumed, empty reply", undelivered: false, silent: false },
+    { name: "one undelivered, NO_REPLY", undelivered: true, silent: true },
+  ])(
+    "settles a yielded cohort according to its remaining results: $name",
+    async ({ undelivered, silent }) => {
+      vi.useFakeTimers();
+      const context = createContext();
+      const consumed = settledChild();
+      const sibling = settledChild();
+      sibling.runId = "sibling";
+      sibling.childSessionKey = "agent:main:subagent:sibling";
+      sibling.delivery = { status: undelivered ? "pending" : "delivered" };
+      const children = [consumed, sibling];
+      for (const child of children) {
+        child.requesterSettleWake!.batchRunIds = children.map((entry) => entry.runId);
+      }
+      registryRead.listSubagentRunsForRequester.mockReturnValue(children);
+      const completeBatch = vi.fn<Wake["completeBatch"]>(() => {
+        for (const child of children) {
+          child.requesterSettleWake = undefined;
+        }
+      });
+      useDirectDelivery();
+      startTurn.mockImplementation(async ({ preflight, io }) => {
+        acceptTurn({ preflight, io });
+        io.emitFinal([
+          true,
+          {
+            status: "ok",
+            result: {
+              payloads: [],
+              meta: { terminalReply: { disposition: silent ? "silent" : "empty" } },
+            },
+          },
+          undefined,
+        ]);
+      });
+      const params = wakeParams(consumed, completeBatch);
+      const run = () =>
+        withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
+
+      await expect(run()).resolves.toBe(true);
+      expect(startTurn).toHaveBeenCalledOnce();
+      expect(completeBatch).toHaveBeenCalledOnce();
+      expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({ delivered: true });
+      await vi.advanceTimersByTimeAsync(30_000);
+      await expect(run()).resolves.toBe(false);
+      expect(startTurn).toHaveBeenCalledOnce();
+      expect(completeBatch).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("retains an expired completion until unrelated interrupted requester work recovers", async () => {
+    const context = createContext();
+    const { child, completeBatch, params } = dispatchFixture();
+    child.completionTarget = "parent";
+    child.completionRequesterSessionId = "requester-session";
+    child.delivery = { status: "suspended", suspendedAt: 4_000, suspendedReason: "expiry" };
+    child.requesterSettleWake = { status: "pending", attemptCount: 0, batchRunIds: [child.runId] };
+    const retained = structuredClone(child);
+    const requester = useDirectDelivery(
+      requesterSnapshot(
+        {},
+        {
+          sessionId: "requester-session",
+          updatedAt: 1,
+          status: "interrupted",
+          abortedLastRun: true,
+          mainRestartRecovery: { cycleId: "interrupted-cycle", revision: 1, chargedAttempts: 0 },
+          restartRecoveryDeliveryRunId: "interrupted-requester-turn",
+          restartRecoveryDeliverySourceRunId: "unrelated-completion-wave",
+        },
+      ),
+    );
+    loadRequester.mockResolvedValue(requester);
+    subagentRuns.set(child.runId, child);
+    onTestFinished(() => {
+      subagentRuns.delete(child.runId);
+    });
+    const run = () => withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
+    startTurn.mockImplementation(async ({ controllerInput, preflight, io }) => {
+      acceptTurn({ controllerInput, preflight, io });
+      await withSessionTurn({ ...REQUESTER_TURN, controllerInput }, async () => {
+        io.emitExecutionStarted?.();
+      });
+      finishProcessedCompletion(io);
+    });
+
+    expect(await reserveRestoredSubagentControllerSources([child])).toEqual([]);
+    await expect(run()).resolves.toBe(false);
+    expect(startTurn).not.toHaveBeenCalled();
+    expect(completeBatch).not.toHaveBeenCalled();
+    expect(child).toEqual(retained);
+    expect(
+      getExistingSessionControllerMailbox(REQUESTER_KEY, REQUESTER_TARGET)?.entries ?? [],
+    ).toEqual([]);
+
+    requester.entry = { sessionId: "requester-session", updatedAt: 2, status: "done" };
+    await expect(run()).resolves.toBe(true);
+    await expect(run()).resolves.toBe(false);
+    expect(startTurn).toHaveBeenCalledOnce();
+    expect(completeBatch).toHaveBeenCalledOnce();
+    expect(child.completion?.resultText).toBe("child result");
   });
 
   it.each(["requester wake", "ordinary delivery"] as const)(
@@ -82,13 +383,7 @@ describe("requester settle dispatch deadline", () => {
       const child = settledChild();
       setSubagentAnnounceDeliveryDepsForTest({
         getRuntimeConfig: () => ({}),
-        loadRequesterSessionEntry: () => ({
-          cfg: {},
-          canonicalKey: REQUESTER_KEY,
-          agentId: "main",
-          storePath: REQUESTER_TARGET.storeScope,
-          entry: { sessionId: "requester-session", updatedAt: 1 },
-        }),
+        loadRequesterSessionEntry: () => requesterSnapshot(),
       });
       const due = Date.now() + 30_000;
       if (kind === "requester wake") {
@@ -136,10 +431,10 @@ describe("requester settle dispatch deadline", () => {
     "obsolete original pending",
     "retry settled",
     "retry settled claim",
-  ] as const)("keeps restored retry custody with historical receipts: %s", async (scenario) => {
+  ] as const)("keeps final-attempt custody with historical receipts: %s", async (scenario) => {
     const stableRunId = "announce:requester-settle:main:agent:main:main:settled-child:yield-1";
     const retryRunId =
-      "announce:requester-settle:main:agent:main:main:settled-child:yield-1:retry-1";
+      "announce:requester-settle:main:agent:main:main:settled-child:yield-1:retry-2";
     const obsoleteOriginalPending = scenario === "obsolete original pending";
     const pendingRunId = obsoleteOriginalPending ? stableRunId : retryRunId;
     const historicalRunId = obsoleteOriginalPending ? retryRunId : stableRunId;
@@ -149,30 +444,11 @@ describe("requester settle dispatch deadline", () => {
       sessionId: "requester-session",
       updatedAt: 1,
       lifecycleRunId: settled ? "recovered-retry" : "recovering-wake",
+      ...(scenario === "retry settled claim" ? { abortedLastRun: true } : {}),
       restartRecoveryTerminalRunIds: settled ? [historicalRunId, retryRunId] : [historicalRunId],
       restartRecoveryTerminalDeliveryEvidence: [
-        {
-          runId: historicalRunId,
-          transcriptRunId: "historical-attempt",
-          captured: true,
-          ...(obsoleteOriginalPending
-            ? { meta: { error: true } }
-            : {
-                payloads: [{ visible: true }],
-                deliveryStatus: { status: "sent" as const, resultCount: 1 },
-              }),
-        },
-        ...(settled
-          ? [
-              {
-                runId: retryRunId,
-                transcriptRunId: "recovered-retry",
-                captured: true as const,
-                payloads: [{ visible: true }],
-                deliveryStatus: { status: "sent" as const, resultCount: 1 },
-              },
-            ]
-          : []),
+        recoveryEvidence(historicalRunId, "historical-attempt", obsoleteOriginalPending),
+        ...(settled ? [recoveryEvidence(retryRunId, "recovered-retry")] : []),
       ],
       ...(!settled || scenario === "retry settled claim"
         ? {
@@ -185,41 +461,14 @@ describe("requester settle dispatch deadline", () => {
     child.requesterSettleWake = {
       ...child.requesterSettleWake!,
       status: "dispatching",
-      attemptCount: 2,
+      attemptCount: 3,
       batchRunIds: [child.runId],
     };
-    registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
-    const readRequester = () => ({
-      cfg: {},
-      canonicalKey: REQUESTER_KEY,
-      agentId: "main",
-      storePath: REQUESTER_TARGET.storeScope,
-      entry: requesterEntry,
-    });
-    loadRequester.mockImplementation(async () => readRequester());
-    setSubagentAnnounceDeliveryDepsForTest({
-      getRuntimeConfig: () => ({}),
-      loadRequesterSessionEntry: readRequester,
-      getRequesterSessionActivity: () => ({
-        sessionId: "requester-session",
-        target: REQUESTER_TARGET,
-        isActive: false,
-      }),
-    });
-    deliver.mockImplementation(sendSubagentAnnounceDirectly);
-    const completeBatch = vi.fn(() => {
-      child.requesterSettleWake = undefined;
-    });
+    const { completeBatch, params } = dispatchFixture(child);
+    const requester = useDirectDelivery(requesterSnapshot({}, requesterEntry));
+    loadRequester.mockResolvedValue(requester);
     expect(await reserveRestoredSubagentControllerSources([child])).toEqual([]);
-    await expect(
-      maybeWakeRequesterAfterAllChildrenSettled({
-        requesterSessionKey: REQUESTER_KEY,
-        isSourceCurrent: () => true,
-        settledEntry: child,
-        transitionBatch: publishWakeTransition,
-        completeBatch,
-      }),
-    ).resolves.toBe(settled);
+    await expect(maybeWakeRequesterAfterAllChildrenSettled(params)).resolves.toBe(settled);
     expect(startTurn).not.toHaveBeenCalled();
     expect(completeBatch).toHaveBeenCalledTimes(reconciled ? 1 : 0);
     if (reconciled) {
@@ -238,7 +487,7 @@ describe("requester settle dispatch deadline", () => {
       );
     } else {
       expect(deliver).not.toHaveBeenCalled();
-      expect(child.requesterSettleWake).toMatchObject({ status: "dispatching", attemptCount: 2 });
+      expect(child.requesterSettleWake).toMatchObject({ status: "dispatching", attemptCount: 3 });
     }
     const mailbox = getExistingSessionControllerMailbox(REQUESTER_KEY, REQUESTER_TARGET);
     expect(mailbox?.entries ?? []).toEqual([]);
@@ -262,6 +511,7 @@ describe("requester settle dispatch deadline", () => {
             : undefined,
       );
       const child = settledChild();
+      child.delivery = { status: "pending" };
       child.requesterSessionKey = requesterSessionKey;
       child.requesterSettleWake = {
         status: "pending",
@@ -271,7 +521,7 @@ describe("requester settle dispatch deadline", () => {
         afterRequesterYield: afterRequesterYield ? true : undefined,
         rearmGeneration: 1,
       };
-      registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
+      const { completeBatch, params } = dispatchFixture(child);
       const append = vi.fn(() => true);
       const owner = {
         requesterAgentId: "main",
@@ -299,20 +549,6 @@ describe("requester settle dispatch deadline", () => {
         finalAssistantVisibleText: "consolidated final",
       } as const;
       deliver.mockResolvedValue(delivered);
-      const completeBatch = vi.fn<
-        Parameters<typeof maybeWakeRequesterAfterAllChildrenSettled>[0]["completeBatch"]
-      >((batch) => {
-        for (const entry of batch) {
-          entry.requesterSettleWake = undefined;
-        }
-      });
-      const params = {
-        isSourceCurrent: () => true,
-        requesterSessionKey,
-        settledEntry: child,
-        transitionBatch: publishWakeTransition,
-        completeBatch,
-      };
 
       await expect(maybeWakeRequesterAfterAllChildrenSettled(params)).resolves.toBe(true);
       expect(deliver).toHaveBeenCalledWith(
@@ -328,8 +564,8 @@ describe("requester settle dispatch deadline", () => {
       expect(completeBatch).toHaveBeenCalledWith([child], 1, delivered, expect.any(Function));
       expect(append).not.toHaveBeenCalled();
       const onCommitted = completeBatch.mock.calls[0]![3]!;
-      onCommitted();
-      onCommitted();
+      await onCommitted();
+      await onCommitted();
       expect(append).toHaveBeenCalledExactlyOnceWith(delivered.finalAssistantVisibleText);
       await expect(maybeWakeRequesterAfterAllChildrenSettled(params)).resolves.toBe(false);
       expect(deliver).toHaveBeenCalledOnce();
@@ -348,59 +584,26 @@ describe("requester settle dispatch deadline", () => {
     child.requesterSettleWake!.pauseNotice = { acknowledgment: "PAUSE-MARKER-mid-turn" };
     registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
     const accepted = createDeferredCore();
-    const releaseTurn = createDeferredCore();
-    const currentTurnStarted = createDeferredCore();
+    const turnGate = createEnteredGate();
     const received: string[] = [];
-    const currentTurn = withSessionTurn(REQUESTER_TURN, async () => {
-      currentTurnStarted.resolve();
-      await releaseTurn.promise;
-    });
-    await currentTurnStarted.promise;
+    const currentTurn = withSessionTurn(REQUESTER_TURN, turnGate.wait);
+    await turnGate.entered;
     startTurn.mockImplementation(async ({ controllerInput, preflight, io }) => {
       const request = preflight.request;
-      io.emitAcceptance([true, { runId: request.idempotencyKey, status: "accepted" }], {
-        runId: request.idempotencyKey,
-      });
+      acceptTurn({ controllerInput, preflight, io });
       const queued = withSessionTurn({ ...REQUESTER_TURN, controllerInput }, async () => {
         io.emitExecutionStarted?.();
         received.push(request.message);
       });
       accepted.resolve();
       await queued;
-      io.emitFinal([
-        true,
-        { status: "ok", result: { payloads: [{ text: "Continuation needed." }] } },
-      ]);
+      finishTurn(io, "Continuation needed.");
     });
-    setSubagentAnnounceDeliveryDepsForTest({
-      getRuntimeConfig: () => ({}),
-      loadRequesterSessionEntry: () => ({
-        cfg: {},
-        canonicalKey: REQUESTER_KEY,
-        agentId: "main",
-        storePath: REQUESTER_TARGET.storeScope,
-        entry: { sessionId: "requester-session", updatedAt: 1 },
-      }),
-      getRequesterSessionActivity: () => ({
-        sessionId: "requester-session",
-        target: REQUESTER_TARGET,
-        isActive: false,
-      }),
+    useDirectDelivery();
+    const params = wakeParams(child, () => {
+      consumeSubagentPauseNotice(child);
     });
-    deliver.mockImplementation(sendSubagentAnnounceDirectly);
-    const params = {
-      requesterSessionKey: REQUESTER_KEY,
-      isSourceCurrent: () => true,
-      settledEntry: child,
-      transitionBatch: publishWakeTransition,
-      completeBatch: () => {
-        consumeSubagentPauseNotice(child);
-      },
-    };
-    const wake = withPluginRuntimeGatewayRequestScope(
-      { context, client: createSyntheticPluginRuntimeClient(), isWebchatConnect: () => false },
-      () => maybeWakeRequesterAfterAllChildrenSettled(params),
-    );
+    const wake = withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
     try {
       await accepted.promise;
       expect(received).toEqual([]);
@@ -409,7 +612,7 @@ describe("requester settle dispatch deadline", () => {
         activeCount: Number(Boolean(mailbox?.claim)),
         queuedCount: mailbox?.entries.filter((entry) => entry.phase !== "claimed").length ?? 0,
       }).toEqual({ activeCount: 1, queuedCount: 1 });
-      releaseTurn.resolve();
+      turnGate.release();
       await currentTurn;
       await expect(wake).resolves.toBe(true);
       expect(received).toHaveLength(1);
@@ -419,7 +622,7 @@ describe("requester settle dispatch deadline", () => {
       await expect(maybeWakeRequesterAfterAllChildrenSettled(params)).resolves.toBe(false);
       expect(startTurn).toHaveBeenCalledOnce();
     } finally {
-      releaseTurn.resolve();
+      turnGate.release();
       await currentTurn;
       await wake;
     }
@@ -430,53 +633,15 @@ describe("requester settle dispatch deadline", () => {
     async (failure) => {
       const context = createContext();
       const createFacade = context.createAgentTurnFacade;
-      const child = settledChild();
-      registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
+      const { child, completeBatch, params } = dispatchFixture();
       const initialWake = structuredClone(child.requesterSettleWake);
-      const completeBatch = vi.fn(() => {
-        child.requesterSettleWake = undefined;
-      });
-      const params = {
-        requesterSessionKey: REQUESTER_KEY,
-        isSourceCurrent: () => true,
-        settledEntry: child,
-        transitionBatch: publishWakeTransition,
-        completeBatch,
-      };
-      setSubagentAnnounceDeliveryDepsForTest({
-        getRuntimeConfig: () => ({}),
-        loadRequesterSessionEntry: () => ({
-          cfg: {},
-          canonicalKey: REQUESTER_KEY,
-          agentId: "main",
-          storePath: REQUESTER_TARGET.storeScope,
-          entry: { sessionId: "requester-session", updatedAt: 1 },
-        }),
-        getRequesterSessionActivity: () => ({
-          sessionId: "requester-session",
-          target: REQUESTER_TARGET,
-          isActive: false,
-        }),
-      });
-      deliver.mockImplementation(sendSubagentAnnounceDirectly);
+      useDirectDelivery();
       startTurn.mockImplementation(async ({ controllerInput, preflight, io }) => {
-        const request = preflight.request;
         if (failure === "admitted") {
-          const registration = registerChatAbortController({
-            target: REQUESTER_TARGET,
-            runId: request.idempotencyKey,
-            sessionId: "requester-session",
-            sessionKey: REQUESTER_KEY,
-            timeoutMs: 1_000,
-            kind: "agent",
-            sourceInput: controllerInput,
-          });
+          const registration = registerRequesterTurn({ controllerInput, preflight, io }, 1_000);
           registration.cleanup();
         } else if (failure === "accepted replay") {
-          io.emitAcceptance([true, { runId: request.idempotencyKey, status: "accepted" }], {
-            runId: request.idempotencyKey,
-            cached: true,
-          });
+          acceptTurn({ controllerInput, preflight, io }, true);
         }
         throw Object.assign(
           new Error("requester dispatch unavailable"),
@@ -487,10 +652,7 @@ describe("requester settle dispatch deadline", () => {
         context.createAgentTurnFacade = undefined;
       }
       const run = () =>
-        withPluginRuntimeGatewayRequestScope(
-          { context, client: createSyntheticPluginRuntimeClient(), isWebchatConnect: () => false },
-          () => maybeWakeRequesterAfterAllChildrenSettled(params),
-        );
+        withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
       await expect(run()).resolves.toBe(false);
       if (failure === "unavailable") {
         expect(startTurn).not.toHaveBeenCalled();
@@ -502,7 +664,7 @@ describe("requester settle dispatch deadline", () => {
             true,
             { runId: preflight.request.idempotencyKey, status: "accepted" },
           ]);
-          io.emitFinal([true, { status: "ok", result: { payloads: [{ text: "Continuation." }] } }]);
+          finishTurn(io, "Continuation.");
         });
         await expect(run()).resolves.toBe(true);
       } else {
@@ -522,13 +684,7 @@ describe("requester settle dispatch deadline", () => {
     const completeBatch = vi.fn();
 
     await expect(
-      maybeWakeRequesterAfterAllChildrenSettled({
-        isSourceCurrent: () => true,
-        requesterSessionKey: REQUESTER_KEY,
-        settledEntry: retired,
-        transitionBatch: publishWakeTransition,
-        completeBatch,
-      }),
+      maybeWakeRequesterAfterAllChildrenSettled(wakeParams(retired, completeBatch)),
     ).resolves.toBe(false);
     expect(deliver).not.toHaveBeenCalled();
     expect(completeBatch).not.toHaveBeenCalled();
@@ -541,11 +697,14 @@ describe("requester settle dispatch deadline", () => {
       vi.setSystemTime(10_000);
       const context = createContext();
       const child = settledChild();
+      child.completionRequesterSessionId = "requester-session";
       registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
       const cfg = {
         agents: { defaults: { timeoutSeconds: 1, subagents: { announceTimeoutMs: 20 } } },
       };
       setRuntimeConfigSnapshot(cfg);
+      const preparationStarted = createDeferredCore();
+      const finishPreparation = createDeferredCore();
       const executionStarted = createDeferredCore();
       const workDone = createDeferredCore();
       const stop = new AbortController();
@@ -556,23 +715,16 @@ describe("requester settle dispatch deadline", () => {
       let acceptedSignal: AbortSignal | undefined;
       startTurn.mockImplementation(async ({ controllerInput, preflight, io }) => {
         const request = preflight.request as { idempotencyKey: string; sessionKey: string };
-        const registration = registerChatAbortController({
-          target: REQUESTER_TARGET,
-          runId: request.idempotencyKey,
-          sessionId: "requester-session",
-          sessionKey: request.sessionKey,
-          timeoutMs,
-          kind: "agent",
-          sourceInput: controllerInput,
-        });
+        const registration = registerRequesterTurn({ controllerInput, preflight, io }, timeoutMs);
         acceptedSignal = registration.controller.signal;
-        io.emitAcceptance([true, { runId: request.idempotencyKey, status: "accepted" }], {
-          runId: request.idempotencyKey,
-        });
         try {
           if (!registration.registered) {
             throw new Error("expected requester RPC source");
           }
+          io.emitStartOwner?.(request.idempotencyKey, registration.entry);
+          preparationStarted.resolve();
+          await finishPreparation.promise;
+          acceptTurn({ controllerInput, preflight, io });
           await withSessionTurn(
             {
               ...REQUESTER_TURN,
@@ -615,10 +767,7 @@ describe("requester settle dispatch deadline", () => {
               }
             },
           );
-          io.emitFinal([
-            true,
-            { status: "ok", result: { payloads: [{ text: finalReceipts[0] }] } },
-          ]);
+          finishTurn(io, finalReceipts[0]);
         } finally {
           const claim = registration.entry?.input.claim;
           registration.cleanup();
@@ -626,40 +775,26 @@ describe("requester settle dispatch deadline", () => {
           await claim?.settlement.promise;
         }
       });
-      setSubagentAnnounceDeliveryDepsForTest({
-        getRuntimeConfig: () => cfg,
-        loadRequesterSessionEntry: () => ({
-          cfg,
-          canonicalKey: REQUESTER_KEY,
-          agentId: "main",
-          storePath: REQUESTER_TARGET.storeScope,
-          entry: { sessionId: "requester-session", updatedAt: 1 },
+      useDirectDelivery(requesterSnapshot(cfg));
+      const wake = withGateway(context, () =>
+        maybeWakeRequesterAfterAllChildrenSettled({
+          ...wakeParams(child, completeBatch),
+          signal: stop.signal,
         }),
-        getRequesterSessionActivity: () => ({
-          sessionId: "requester-session",
-          target: REQUESTER_TARGET,
-          isActive: false,
-        }),
-      });
-      deliver.mockImplementation(sendSubagentAnnounceDirectly);
-      const wake = withPluginRuntimeGatewayRequestScope(
-        {
-          context,
-          client: createSyntheticPluginRuntimeClient(),
-          isWebchatConnect: () => false,
-        },
-        () =>
-          maybeWakeRequesterAfterAllChildrenSettled({
-            isSourceCurrent: () => true,
-            requesterSessionKey: REQUESTER_KEY,
-            settledEntry: child,
-            signal: stop.signal,
-            transitionBatch: publishWakeTransition,
-            completeBatch,
-          }),
       );
+      let settled = false;
+      void wake.then(() => {
+        settled = true;
+      });
       try {
-        await executionStarted.promise;
+        await preparationStarted.promise;
+        await vi.advanceTimersByTimeAsync(21);
+        expect(settled).toBe(false);
+        expect(acceptedSignal?.aborted).toBe(false);
+        finishPreparation.resolve();
+        expect(
+          await Promise.race([executionStarted.promise.then(() => true), wake.then(() => false)]),
+        ).toBe(true);
         await vi.advanceTimersByTimeAsync(21);
         expect(acceptedSignal?.aborted).toBe(false);
         expect(finalReceipts).toEqual([]);
@@ -709,6 +844,7 @@ describe("requester settle dispatch deadline", () => {
         expect(child.execution.outcome).toEqual({ status: "ok" });
         expect(child.completion?.resultText).toBe("child result");
       } finally {
+        finishPreparation.resolve();
         workDone.resolve();
         stop.abort();
         await wake;

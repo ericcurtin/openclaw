@@ -109,7 +109,6 @@ suite.define(() => {
       await gateway.setHistoryMessages(historyMessages.slice(0, 3));
       await receipt(gateway, successorRunId, historyMessages[2], "restart-recovery-input", 3);
       const notice = thread.locator(".chat-notice", { hasText: "System · restart recovery" });
-      await thread.locator(".chat-system-events__summary").click();
       await notice.waitFor();
       expect(await notice.locator(".chat-notice__body").count()).toBe(0);
       expect(await notice.getAttribute("role")).toBeNull();
@@ -133,7 +132,6 @@ suite.define(() => {
       await gateway.setMethodResponse("chat.history", { messages: historyMessages });
       await page.reload();
       await answer.waitFor();
-      await thread.locator(".chat-system-events__summary").click();
       await notice.waitFor();
       expect(await partialOutput.count()).toBe(1);
       expect(await notice.locator(".chat-notice__body").count()).toBe(0);
@@ -161,10 +159,14 @@ suite.define(() => {
           retryAt: now + 8_000,
         },
       });
-      // Agent events publish through the presentation owner’s animation frame.
-      await page.clock.runFor(32);
       const status = page.locator(".chat-working-indicator__status");
-      await expect.poll(() => status.textContent()).toContain("Retrying in 8s");
+      // The first live event can load its owner before scheduling the presentation frame.
+      await expect
+        .poll(async () => {
+          await page.clock.runFor(32);
+          return status.textContent();
+        })
+        .toContain("Retrying in 8s");
       expect(await page.locator(".chat-run-failure, .chat-error").count()).toBe(0);
       expect(await status.locator(".chat-working-indicator__elapsed").count()).toBe(1);
       await page.clock.runFor(8_000);

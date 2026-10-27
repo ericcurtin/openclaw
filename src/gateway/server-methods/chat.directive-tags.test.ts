@@ -17,8 +17,12 @@ import {
   type CronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import { createZeroUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
 import { onTrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
-import type { ReplyDispatchRun } from "../../auto-reply/get-reply-options.types.js";
+import type {
+  GetReplyOptions,
+  ReplyDispatchRun,
+} from "../../auto-reply/get-reply-options.types.js";
 import { setReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { getTotalPendingReplies } from "../../auto-reply/reply/dispatcher-registry.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
@@ -51,6 +55,7 @@ import {
 } from "../../sessions/session-controller.js";
 import {
   bindSessionControllerTarget,
+  captureSessionControllerSettlement,
   captureSessionTarget,
   getSessionControllerWorkCount,
   runSessionMutation,
@@ -88,11 +93,13 @@ import { registerChatSourceMediaTests } from "./chat.directive-tags.source-media
 import {
   ChatDirectiveDedupe,
   createChatDirectiveReplyBackend,
+  createExpectedAcpUserTurn,
   createGlobalChatDirectiveConfig,
   createChatDirectiveSender,
   createChatDirectiveSuiteResources,
   createChatDirectiveUserMessageReader,
   expectManagedAudioBlock,
+  managedAudioBlocks,
   createUnconfirmedTranscriptDelivery,
   expectClaimOnlyTranscriptMedia,
   readChatDirectiveConfig,
@@ -154,7 +161,7 @@ const mockState = vi.hoisted(() => {
     lastDispatchThinkingLevelOverride: undefined as string | undefined,
     lastDispatchOriginatingLeafEntryId: undefined as string | null | undefined,
     lastTaskSuggestionDeliveryMode: undefined as "gateway" | undefined,
-    lastMessageInjectionDisposition: undefined as "none" | "accepted" | "rejected" | undefined,
+    lastMessageInjectionDisposition: undefined as GetReplyOptions["messageInjectionDisposition"],
     lastDispatchUserTurnInput: undefined as unknown,
     modelCatalog: null as ModelCatalogEntry[] | null,
     emittedTranscriptUpdates: [] as TranscriptUpdate[],
@@ -518,15 +525,14 @@ vi.mock("../../sessions/transcript-events.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../agents/sandbox/context.js", async () => {
-  const original = await vi.importActual<typeof import("../../agents/sandbox/context.js")>(
-    "../../agents/sandbox/context.js",
-  );
-  return {
-    ...original,
-    ensureSandboxWorkspaceForSession: vi.fn(async () => mockState.sandboxWorkspace),
-  };
-});
+vi.mock("../../agents/sandbox/context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/sandbox/context.js")>()),
+  prepareSandboxWorkspaceForSession: vi.fn(async () =>
+    mockState.sandboxWorkspace
+      ? { workspace: mockState.sandboxWorkspace, assertCurrent() {}, [Symbol.dispose]() {} }
+      : null,
+  ),
+}));
 
 vi.mock("../../auto-reply/reply/stage-sandbox-media.js", () => ({
   SANDBOX_MEDIA_MAX_BYTES: 50 * 1024 * 1024,
@@ -751,20 +757,7 @@ async function appendSourceReplyMirrorEntry(params: {
       model: params.model ?? "delivery-mirror",
       ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
       ...(params.openclawDelivery ? { openclawDelivery: params.openclawDelivery } : {}),
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          total: 0,
-        },
-      },
+      usage: createZeroUsageFixture(),
       stopReason: "stop",
       timestamp: now,
     },
@@ -820,10 +813,9 @@ function findAssistantTranscriptUpdates() {
 }
 
 function findUserUpdate() {
-  return mockState.emittedTranscriptUpdates.find((update) => {
-    const message = update.message as { role?: unknown } | undefined;
-    return message?.role === "user";
-  });
+  return mockState.emittedTranscriptUpdates.find(
+    (update) => asOptionalRecord(update.message)?.role === "user",
+  );
 }
 
 function expectUserUpdateIdentity(update: ReturnType<typeof findUserUpdate>) {
@@ -994,10 +986,6 @@ function createSlashCommandMediaReply(
   payload: (typeof mockState.dispatchedReplies)[number]["payload"] = {},
 ): (typeof mockState.dispatchedReplies)[number] {
   return { kind, payload: { mediaUrls, trustedLocalMedia: true, ...payload } };
-}
-
-function managedAudioBlocks(content: Array<Record<string, unknown>>) {
-  return content.filter((block) => block.type === "audio");
 }
 
 function bindTestToolAuthority(operation: ReplyOperation) {
@@ -1287,6 +1275,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(context.addChatRun).toHaveBeenCalledTimes(accepted ? 1 : 0);
     if (accepted) {
       expect(response[1]).toEqual(expect.objectContaining({ status: "started" }));
+      await captureSessionControllerSettlement({
+        scope: mockState.storePath,
+        identities: [requestedSessionId],
+      });
     } else {
       expect(response).toEqual([
         false,
@@ -1582,14 +1574,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     }
   });
 
-  it("starts captured-operation injection before ACK and does not dispatch after owner clear", async () => {
+  it("acknowledges captured-operation input before injection and does not dispatch after owner clear", async () => {
     const { context, respond, send } = await createSqliteChatRequest(
       "openclaw-chat-send-steer-before-ack-",
     );
     const delivery = createDeferred();
     let reportAcceptance: ((accepted: boolean) => void) | undefined;
     const queueMessage = vi.fn((_text: string, options?: ReplyBackendQueueMessageOptions) => {
-      expect(respond).not.toHaveBeenCalled();
+      expect(respond).toHaveBeenCalledOnce();
       reportAcceptance = options?.onQueueAccepted;
       return delivery.promise;
     });
@@ -1607,8 +1599,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     try {
       await waitForAssertion(() => expect(queueMessage).toHaveBeenCalledOnce());
-      expect(respond).not.toHaveBeenCalled();
-      reportAcceptance?.(true);
       await pendingSend;
       expect(respond).toHaveBeenCalledWith(
         true,
@@ -1617,6 +1607,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         expect.any(Object),
       );
       expect(mockState.lastDispatchCtx).toBeUndefined();
+      reportAcceptance?.(true);
       operation.complete();
       delivery.resolve();
       await waitForAssertion(() => {
@@ -1775,7 +1766,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     }
   });
 
-  it("hydrates and accepts reply injection before ACK without waiting for delivery", async () => {
+  it("hydrates durable reply input before ACK without waiting for runtime acceptance or delivery", async () => {
     const { context, respond, send } = await createSqliteChatRequest(
       "openclaw-chat-send-reply-steer-",
     );
@@ -1820,9 +1811,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(queueMessage.mock.calls[0]?.[0]).toContain("Reply target of current user message:");
       expect(queueMessage.mock.calls[0]?.[0]).toContain("quoted deployment status");
       expect(queueMessage.mock.calls[0]?.[0]).toContain("hello");
-      expect(respond).not.toHaveBeenCalled();
-
-      reportAcceptance?.(true);
       await pendingSend;
       expect(respond).toHaveBeenCalledWith(
         true,
@@ -1832,7 +1820,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       );
       expect(context.broadcast).not.toHaveBeenCalled();
       expect(mockState.lastDispatchCtx).toBeUndefined();
-
+      reportAcceptance?.(true);
       delivery.resolve();
       await waitForAssertion(() => expect(context.broadcast).toHaveBeenCalledOnce());
     } finally {
@@ -1931,7 +1919,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     try {
       await waitForAssertion(() => expect(queueMessage).toHaveBeenCalledOnce());
       // A negative callback is provisional; only the terminal rejection permits fallback.
-      expect(respond).not.toHaveBeenCalled();
+      expect(respond).toHaveBeenCalledOnce();
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBefore);
       delivery.reject(rejection);
       await pendingSend;
@@ -4142,18 +4130,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
     expect(mockState.lastDispatchCtx?.RawBody).toBe("bench update");
     expect(mockState.lastDispatchCtx?.CommandBody).toBe("bench update");
-    expect(mockState.lastDispatchUserTurnInput).toEqual({
-      role: "user",
-      content: "bench update",
-      timestamp: expect.any(Number),
-      idempotencyKey: "idem-system-provenance-acp:user",
-      __openclaw: {
-        chatRequestIdentity: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    expect(mockState.lastDispatchUserTurnInput).toEqual(
+      createExpectedAcpUserTurn({
+        content: "bench update",
+        idempotencyKey: "idem-system-provenance-acp:user",
         senderIsOwner: true,
-        transport: { clients: [{ id: "cli", mode: "cli", displayName: "ACP" }] },
-      },
-      provenance,
-    });
+        provenance,
+      }),
+    );
   });
 
   it("does not emit pre-gate user transcript content when before_agent_run hooks are registered", async () => {
@@ -4294,16 +4278,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await waitForAssertion(() => {
       expect(mockState.savedMediaCalls).toStrictEqual([]);
       expect(findUserUpdate()).toBeUndefined();
-      expect(mockState.lastDispatchUserTurnInput).toEqual({
-        role: "user",
-        content: "bridge image",
-        timestamp: expect.any(Number),
-        idempotencyKey: "idem-user-transcript-acp-images:user",
-        __openclaw: {
-          chatRequestIdentity: expect.stringMatching(/^[a-f0-9]{64}$/u),
-          transport: { clients: [{ id: "cli", mode: "cli", displayName: "ACP" }] },
-        },
-      });
+      expect(mockState.lastDispatchUserTurnInput).toEqual(
+        createExpectedAcpUserTurn({
+          content: "bridge image",
+          idempotencyKey: "idem-user-transcript-acp-images:user",
+        }),
+      );
     });
   });
 
@@ -4756,20 +4736,20 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await createSqliteTranscriptFixture("openclaw-chat-send-user-transcript-error-replay-");
     mockState.dispatchError = new Error("upstream unavailable");
 
-    await runNonStreamingChatSend({
-      context: createChatContext(),
-      respond: vi.fn(),
+    const request = {
       idempotencyKey: "idem-user-transcript-error-replay",
       message: "hello from replayed failed dispatch",
-      expectBroadcast: false,
-    });
-    await runNonStreamingChatSend({
-      context: createChatContext(),
-      respond: vi.fn(),
-      idempotencyKey: "idem-user-transcript-error-replay",
-      message: "hello from replayed failed dispatch",
-      expectBroadcast: false,
-    });
+    };
+    await sendNewChatRequest({ ...request, expectBroadcast: false });
+    const dispatchCallsBeforeReplay = dispatchInboundMessageMock.mock.calls.length;
+    const { respond } = await sendNewChatRequest({ ...request, waitFor: "none" });
+    expect(respond).toHaveBeenCalledExactlyOnceWith(
+      true,
+      { runId: "idem-user-transcript-error-replay", status: "ok", messageSeq: 1 },
+      undefined,
+      { cached: true, runId: "idem-user-transcript-error-replay" },
+    );
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBeforeReplay);
 
     expect(readPersistedUserMessages()).toEqual([
       expect.objectContaining({

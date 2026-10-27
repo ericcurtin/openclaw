@@ -78,7 +78,9 @@ for turn settlement; suppressing its display history does not undo its execution
 Terminal tool and activity events are published only after the nested activity
 append is accepted. Effect and replay-safety evidence is captured before that
 append, so a persistence failure cannot undo a known tool effect or make it safe
-to repeat. Starts and partial updates remain transient. Older missing child
+to repeat. Lifecycle accounting settles from the captured outcome even when
+cancellation, supersession, or persistence failure suppresses terminal presentation.
+Starts and partial updates remain transient. Older missing child
 history cannot be reconstructed from source code or outer results.
 
 Thrown tool errors are catchable. Returned values may instead report failure.
@@ -197,11 +199,19 @@ committed session-store projection.
 
 The projection is initialized lazily at the first store operation and shares
 the admitted catalog/result-store lifetime. For a persisted session, core uses
-the existing off-thread `SessionManager.openAsync` API to read the full branch
+the off-thread transcript maintenance reader to select store entries on the branch
 ending at the live session's current leaf. This includes custom entries older
 than the live manager's bounded hydration window. An unmatched leaf fails the
 operation rather than exposing a different branch. Subsequent operations use
 the projection, applying this run's own commits without rescanning the branch.
+
+Across admitted runs, core reuses a validated projection only when a fresh read
+matches the physical session identity, transcript rewrite generation, and ordered
+store-entry IDs. The cache retains at most 16 sessions and 8 MiB of accounted
+JSON and metadata; histories above 4,096 entries or 1,024 live keys are not cached.
+Session removal and database shutdown discard retained projections. Store writes,
+branch changes, and rewrites select a new projection through the same replay and
+budget checks. Loaded values remain detached copies, and persisted bytes do not change.
 
 Only a cell that settles `completed` commits its non-empty write set. Core
 appends one `custom` entry with type `openclaw.code-mode-store` through
@@ -245,9 +255,14 @@ bridge as QuickJS. Suspension retains the worker, context, and pending promises;
 `wait` continues that context without replaying the source. Cancellation,
 expiry, terminal results, and shutdown release the retained execution.
 
-After successful completion, Node keeps up to four idle workers for 30 seconds
+After successful completion, Node keeps up to eight idle workers for 30 seconds
 to reuse short bursts, then retains one for up to five minutes since its last
-completion. Reuse requires the same runtime entry and heap limit.
+completion. The combined nominal warm-heap budget is 512 MiB with the default
+64 MiB per worker, or 8 GiB at the maximum 1 GiB per-worker configuration;
+external allocations are excluded, so this is not an RSS limit.
+Reuse requires the same runtime entry and heap limit. Serial work reuses the
+most recently completed matching worker so surplus workers from an earlier burst
+can expire instead of having their idle deadlines repeatedly reset.
 Reuse stays within the creating Gateway or CLI command lifetime; closing that
 host joins worker retirement. Standalone executor calls without a host close
 their completed worker immediately. Each new cell still gets a fresh VM context.

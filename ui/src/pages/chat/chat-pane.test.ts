@@ -7,6 +7,7 @@ import type { GatewaySessionRow, ModelCatalogEntry } from "../../api/types.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
+import * as clipboard from "../../lib/clipboard.ts";
 import { showToast } from "../../lib/toast.ts";
 import {
   createGatewayRequestMock,
@@ -19,16 +20,17 @@ import {
   waitForInputDialog,
 } from "../../test-helpers/modal-dialog.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import {
+  createGatewayBrowserClientFixture,
+  createInitializationContext,
+  createSessionContext,
+} from "./chat-application-context.test-support.ts";
 import { isExpiredIncognitoSession } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
 import { subscribeChatPaneSnapshotInvalidation } from "./chat-pane-startup-subscriptions.ts";
 import {
-  createGatewayBrowserClientFixture,
-  createInitializationContext,
-  createSessionCapabilityFixture,
-  createSessionContext,
   createTestChatPane,
   createPaneTestHost,
   getPaneTestRuntime,
@@ -36,6 +38,7 @@ import {
   nativeHistoryMessage,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { openSessionWorkspacePreview } from "./components/chat-session-workspace-state.ts";
 import type { SidebarContent } from "./components/chat-sidebar-content-types.ts";
@@ -95,7 +98,7 @@ describe("chat pane retained presentation", () => {
           defaults: { modelProvider: null, model: null, contextTokens: null },
           sessions: [{ key: state.sessionKey, kind: "direct", updatedAt }],
         } satisfies NonNullable<ApplicationContext["sessions"]["state"]["result"]>;
-        pane.applySessionsState({
+        Object.assign(pane.context.sessions.state, {
           agentId: "main",
           deletedSessions: [],
           error: null,
@@ -106,6 +109,7 @@ describe("chat pane retained presentation", () => {
           result,
           sectionOrder: [],
         });
+        pane.applySessionsState(pane.context.sessions.state);
         expect(state.sessionsResult).toBe(result);
       }
 
@@ -143,6 +147,12 @@ describe("chat pane retained presentation", () => {
 });
 
 describe("chat pane header state", () => {
+  const workspaceSession = {
+    key: "agent:main:current",
+    kind: "direct",
+    updatedAt: 0,
+  } satisfies GatewaySessionRow;
+
   it("aborts a stale header delete confirm and shows a retry notice when the connection is replaced while it is open", async () => {
     const restoreDialogPolyfill = installDialogPolyfill();
     try {
@@ -227,6 +237,13 @@ describe("chat pane header state", () => {
 
       result.sessions = [];
       landCatalogWrite();
+      await vi.waitFor(() =>
+        expect(document.body.querySelector("openclaw-modal-dialog [role=alert]")).not.toBeNull(),
+      );
+      expect((await waitForInputDialog()).value).toBe("Projects");
+      document.body
+        .querySelector<HTMLButtonElement>('openclaw-modal-dialog button[type="button"]')
+        ?.click();
       await pending;
 
       expect(patch).not.toHaveBeenCalled();
@@ -272,14 +289,10 @@ describe("chat pane header state", () => {
       client: createGatewayBrowserClientFixture(),
       sessions: createSessionCapabilityFixture(),
     });
-    const session = {
-      key: "agent:main:current",
-      kind: "direct",
-      updatedAt: 0,
-    } satisfies GatewaySessionRow;
-    const copy = vi.fn(async () => true);
-    pane.handleHeaderMenuAction("copy-path", session, "/src/openclaw", "feature/header", copy);
-    pane.handleHeaderMenuAction("copy-branch", session, "/src/openclaw", "feature/header", copy);
+    const copy = vi.spyOn(clipboard, "copyToClipboard").mockResolvedValue(true);
+    onTestFinished(() => copy.mockRestore());
+    pane.handleHeaderMenuAction("copy-path", workspaceSession, "/src/openclaw", "feature/header");
+    pane.handleHeaderMenuAction("copy-branch", workspaceSession, "/src/openclaw", "feature/header");
     await Promise.resolve();
     expect(copy).toHaveBeenNthCalledWith(1, "/src/openclaw");
     expect(copy).toHaveBeenNthCalledWith(2, "feature/header");
@@ -292,14 +305,10 @@ describe("chat pane header state", () => {
     });
     const errors = observeErrors(state);
     expect(errors()).toEqual({ lastError: null, chatError: null });
-    const session = {
-      key: "agent:main:current",
-      kind: "direct",
-      updatedAt: 0,
-    } satisfies GatewaySessionRow;
-    const copy = vi.fn(async () => false);
+    const copy = vi.spyOn(clipboard, "copyToClipboard").mockResolvedValue(false);
+    onTestFinished(() => copy.mockRestore());
 
-    pane.handleHeaderMenuAction("copy-path", session, "/src/openclaw", "feature/header", copy);
+    pane.handleHeaderMenuAction("copy-path", workspaceSession, "/src/openclaw", "feature/header");
 
     await vi.waitFor(() => expect(state.chatError).toBe("Copy failed"));
     flush();
@@ -466,12 +475,7 @@ describe("chat pane header state", () => {
       client: createGatewayBrowserClientFixture({ request }),
       sessions: createSessionCapabilityFixture(),
     });
-    const session = {
-      key: "agent:main:current",
-      kind: "direct",
-      updatedAt: 0,
-    } satisfies GatewaySessionRow;
-    pane.handleHeaderMenuAction("reveal", session, "/src/openclaw", null);
+    pane.handleHeaderMenuAction("reveal", workspaceSession, "/src/openclaw", null);
     await vi.waitFor(() => expect(state.chatError).toBe("No desktop available."));
     expect(state.lastError).toBe(state.chatError);
   });
@@ -497,13 +501,7 @@ describe("chat pane header state", () => {
       client: createGatewayBrowserClientFixture({ request }),
       sessions: createSessionCapabilityFixture(),
     });
-    const session = {
-      key: "agent:main:current",
-      kind: "direct",
-      updatedAt: 0,
-    } satisfies GatewaySessionRow;
-
-    pane.handleHeaderMenuAction("reveal", session, "/src/openclaw", null);
+    pane.handleHeaderMenuAction("reveal", workspaceSession, "/src/openclaw", null);
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
     retire(pane);
     revealed.resolve({ ok: false, error: "No desktop available." });
@@ -671,7 +669,6 @@ describe("chat pane initialization", () => {
             agentId: "main",
             avatar: null,
             avatarReason: null,
-            avatarSource: null,
             avatarStatus: null,
             name: "Assistant",
           },
@@ -902,7 +899,12 @@ describe("chat pane session creation lifecycle", () => {
 
     const pending = pane.createSession();
     await expect(pane.createSession()).resolves.toBe(false);
-    expect(sessions.create).toHaveBeenCalledExactlyOnceWith({ agentId: "main", incognito: true });
+    await vi.waitFor(() =>
+      expect(sessions.create).toHaveBeenCalledExactlyOnceWith(
+        { agentId: "main", incognito: true },
+        { signal: expect.any(AbortSignal) },
+      ),
+    );
     const nextKey = "agent:main:dashboard:incognito-fresh";
     created.resolve(nextKey);
     await expect(pending).resolves.toBe(true);
@@ -1036,7 +1038,9 @@ describe("chat pane history pagination intent", () => {
     pane.loadOlderMessages = vi.fn(async () => true);
     vi.stubGlobal("TouchEvent", undefined);
     const thread = document.createElement("div");
-    thread.innerHTML = '<div class="chat-history-sentinel"></div>';
+    const sentinel = thread.appendChild(document.createElement("div"));
+    sentinel.className = "chat-history-sentinel";
+    pane.historySentinel = sentinel;
     pane.append(thread);
     vi.spyOn(pane.transcript, "scrollElement", "get").mockReturnValue(thread);
     const event = new WheelEvent("wheel", { deltaY: -1 });
@@ -1067,7 +1071,9 @@ describe("chat pane history pagination intent", () => {
     }
     vi.stubGlobal("TouchEvent", TestTouchEvent);
     const thread = document.createElement("div");
-    thread.innerHTML = '<div class="chat-history-sentinel"></div>';
+    const sentinel = thread.appendChild(document.createElement("div"));
+    sentinel.className = "chat-history-sentinel";
+    pane.historySentinel = sentinel;
     pane.append(thread);
     vi.spyOn(pane.transcript, "scrollElement", "get").mockReturnValue(thread);
     const touchEvent = (type: string, clientY: number) => {

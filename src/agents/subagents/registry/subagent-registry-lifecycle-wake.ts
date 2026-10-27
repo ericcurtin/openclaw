@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
-import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
+import { revokeGoalContinuationReturn } from "../../../auto-reply/reply/goal-continuation-return.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context-store.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { isGatewayRestartDrainError } from "../../../process/gateway-work-admission.js";
 import { getCurrentSessionControllerOwner } from "../../../sessions/session-controller.context.js";
@@ -18,7 +19,10 @@ import { SubagentAnnouncePreparationConflictError } from "../announce/subagent-a
 import { revokeRequesterCronAuthorityBatch } from "../requester-cron-authority.js";
 import { revokeRequesterFinalAttachment } from "../requester-final-attachment.js";
 import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
-import { retireSubagentControllerInputs } from "./subagent-controller-inputs.js";
+import {
+  captureSubagentControllerInputRetirement,
+  retireSubagentControllerInputs,
+} from "./subagent-controller-inputs.js";
 import { isCompletedRequesterDeliveryBlocked } from "./subagent-delivery-state.js";
 import { retireSubagentGatewayBinding } from "./subagent-registry-execution-cleanup.js";
 import type {
@@ -195,6 +199,7 @@ export async function retireSubagentObligationsInContext(
           return;
         }
         clearRequesterSettleWait(context, scope);
+        revokeGoalContinuationReturn(published);
         const requesterAgentId = resolveSubagentRequesterAgentId(
           context.options.getRuntimeConfig(),
           published,
@@ -375,7 +380,7 @@ export function scheduleRequesterSettleWake(
     batch: readonly SubagentRunRecord[],
     rearmGeneration: number | undefined,
     outcome?: Parameters<typeof settleRequesterSettleWakeBatch>[3],
-    onCommitted?: () => void,
+    onCommitted?: () => void | Promise<void>,
   ) => {
     // A retirement may have replaced the pause notice this evaluation was delivering.
     entry = currentSubagentRunOrObserved(params.runs, entry);
@@ -384,6 +389,7 @@ export function scheduleRequesterSettleWake(
     }
     // Retry bookkeeping with the observed outcome, never by replaying delivery or inventing failure.
     const receipt: RequesterWakeMutationReceipt = {};
+    const retireInputs = batch.map(captureSubagentControllerInputRetirement);
     const settlement = {
       scope,
       rearmGeneration,
@@ -421,7 +427,10 @@ export function scheduleRequesterSettleWake(
           }
         }
         if (settlesMembers) {
-          onCommitted?.();
+          for (const retire of retireInputs) {
+            retire();
+          }
+          await onCommitted?.();
           releaseRequesterSettleWakeBatch(context, members, rearmGeneration);
         }
       },
@@ -436,7 +445,7 @@ export function scheduleRequesterSettleWake(
     void context
       .runRequesterSettleWake(
         entry,
-        async () => {
+        async (releasePreparation) => {
           // Admission can wait; reread the row before a blocked receipt is executed again.
           if (
             !isSourceCurrent() ||
@@ -466,6 +475,7 @@ export function scheduleRequesterSettleWake(
                   requesterOrigin: entry.requesterOrigin,
                   settledEntry: entry,
                   isSourceCurrent,
+                  onAccepted: releasePreparation,
                   onDescendantsPending: (deadline) => {
                     if (isSourceCurrent()) {
                       descendantWait = { entry, deadline };
@@ -689,7 +699,7 @@ export function scheduleRequesterSettleWake(
               },
               Math.max(0, waiting.deadline - Date.now()),
             );
-            waiting.timer.unref?.();
+            waiting.timer.unref();
           }
         }
       });

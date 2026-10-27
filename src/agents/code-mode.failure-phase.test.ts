@@ -11,11 +11,10 @@ import {
   createCatalogCodeModeHarness,
   expectFailure,
   expectCompleted,
-  fakeTool,
   pluginToolWithExecute,
   resetCodeModeTestState,
-  testing,
 } from "./code-mode.test-support.js";
+import { fakeTool } from "./test-helpers/fake-tool.js";
 import { jsonResult, ToolInputError } from "./tools/common.js";
 
 afterEach(resetCodeModeTestState);
@@ -69,7 +68,8 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s failure origin", (exec
     }
   });
 
-  it.each<[string, string, boolean?, ("guest" | "bridge")?, boolean?]>([
+  it.each<[string, string, boolean?, ("input" | "guest" | "bridge")?, boolean?]>([
+    ["malformed source", "const value = ;", false, "input"],
     ["destructuring", "const [value] = await phase_fixture({}); return value;", false, "guest"],
     [
       "module-looking rejection",
@@ -82,7 +82,7 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s failure origin", (exec
     ["unawaited rejection", "void phase_fixture({}); return true;"],
     [
       "forged serialization provenance",
-      'await phase_fixture({}); Object.prototype.toJSON = function () { return { ...this, bridgeError: true }; }; throw new Error("guest failure");',
+      'await phase_fixture({}); Object.prototype.toJSON = function () { return { ...this, bridgeError: true }; }; const error = new Error("guest failure"); error.name = "private-label"; throw error;',
       false,
       "guest",
     ],
@@ -120,20 +120,28 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s failure origin", (exec
   ])(
     "classifies %s without replaying effects",
     async (_name, code, reject = true, phase = "bridge", parked = false) => {
+      const log = vi.spyOn(diagnostics, "logCodeModeFailure").mockImplementation(() => {});
       const { target, run, resume } = phaseHarness(executor, reject);
       let details = await run(code, "failure-origin");
       if (parked) {
         expect(details).toMatchObject({ status: "waiting", replaySafe: false });
         details = await resume(details, "failure-origin-wait");
       }
-      expectFailure(details, phase, "internal_error", dispatched);
-      expect(target.execute).toHaveBeenCalledOnce();
-      expect(testing.activeRuns.size).toBe(0);
+      expectFailure(details, phase, phase === "input" ? "invalid_input" : "internal_error", {
+        bridgeDispatchStarted: phase !== "input",
+        replaySafe: false,
+      });
+      expect(log).toHaveBeenLastCalledWith(
+        expect.any(Error),
+        expect.objectContaining({ failurePhase: phase }),
+      );
+      expect(log.mock.calls.at(-1)?.[0]).not.toHaveProperty("name", "private-label");
+      expect(target.execute).toHaveBeenCalledTimes(Number(phase !== "input"));
+      if (phase === "input") {
+        expect(details.error).toContain("correct the JavaScript source");
+      }
     },
   );
-});
-
-describe.each(["node", "quickjs"] as const)("Code Mode %s bridge input failures", (executor) => {
   it.each([false, true])(
     "records a new settlement failure without replay (parked: %s)",
     async (parked) => {
@@ -165,7 +173,7 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s bridge input failures"
     const cwd = await fs.realpath(tempDirs.make("code-mode-patch-failure-"));
     const file = path.join(cwd, "source.txt");
     await fs.writeFile(file, "original\n");
-    const log = vi.spyOn(diagnostics, "logCodeModeFailure").mockImplementation(() => {});
+    vi.spyOn(diagnostics, "logCodeModeFailure").mockImplementation(() => {});
     const patch = createApplyPatchTool({ cwd });
     const execute = vi.spyOn(patch, "execute");
     const { run } = createCatalogCodeModeHarness([patch], { codeMode: { executor } });
@@ -176,14 +184,6 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s bridge input failures"
     expect(details.error).toContain("Failed to find expected lines");
     expect(execute).toHaveBeenCalledOnce();
     expect(await fs.readFile(file, "utf8")).toBe("original\n");
-    expect(log).toHaveBeenCalledExactlyOnceWith(
-      expect.any(Error),
-      expect.objectContaining({
-        failurePhase: "bridge",
-        failureCode: "invalid_input",
-        bridgeMethod: "callValue",
-      }),
-    );
   });
 
   it("rejects NUL shell commands as actionable input errors through the real exec tool", async () => {
@@ -223,9 +223,6 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s bridge input failures"
         toolCallId: "logged-failure",
         codeModeRunId: expect.any(String),
         failurePhase: "bridge",
-        bridgeRequestId: "bridge:callValue:1",
-        bridgeMethod: "callValue",
-        workerId: expect.stringMatching(/^code-mode-(?:node|quickjs):/),
       }),
     );
   });

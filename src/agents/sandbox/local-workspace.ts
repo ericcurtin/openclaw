@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  checkpointLocalWorkspace,
   resolveLocalWorkspaceOwner,
   withLocalWorkspaceProjection,
 } from "../../gateway/worker-environments/local-workspace-projection.js";
@@ -11,7 +12,19 @@ import {
   startWorktreePreparationPhase,
 } from "../worktrees/preparation-timing.js";
 import { bindSandboxInputStager, getSandboxInputStager } from "./input-staging.js";
+import {
+  bindSandboxPersistentExecCapability,
+  getSandboxPersistentExecCapability,
+} from "./persistent-exec.types.js";
 import type { SandboxConfig, SandboxContext } from "./types.js";
+
+export function assertLocalSandboxWorkspaceBackend(backend: SandboxConfig["backend"]) {
+  if (backend !== "docker" && backend !== "podman") {
+    throw new Error(
+      "Managed guest projects require a local Docker or Podman sandbox; this backend cannot safely reconcile a local managed checkout",
+    );
+  }
+}
 
 /** A writable project is an exact managed projection, never a role-policy override. */
 export async function prepareLocalSandboxWorkspace(params: {
@@ -37,6 +50,18 @@ export async function prepareLocalSandboxWorkspace(params: {
       owner[Symbol.dispose]();
     }
   };
+  const retainOwner = () => {
+    owner.assertCurrent();
+    retained++;
+    let released = false;
+    return () => {
+      if (!released) {
+        released = true;
+        retained--;
+        releaseOwner();
+      }
+    };
+  };
   const assertCurrent = () => {
     params.assertCurrent?.();
     if (disposed) {
@@ -49,14 +74,11 @@ export async function prepareLocalSandboxWorkspace(params: {
     assertCurrent,
     workerAuthority: { ...owner.workerAuthority, assertCurrent },
   };
+  const checkpoint = () => checkpointLocalWorkspace(owner);
   try {
     assertCurrent();
     markManagedWorktreePreparation();
-    if (params.sandbox.backend !== "docker" && params.sandbox.backend !== "podman") {
-      throw new Error(
-        "Managed guest projects require a local Docker or Podman sandbox; this backend cannot safely reconcile a local managed checkout",
-      );
-    }
+    assertLocalSandboxWorkspaceBackend(params.sandbox.backend);
     const existing = await withLocalWorkspaceProjection(executionOwner, (state) => state.reuse());
     let workspaceDir: string;
     if (existing) {
@@ -96,15 +118,7 @@ export async function prepareLocalSandboxWorkspace(params: {
       assertCurrent,
       retain: () => {
         assertCurrent();
-        retained++;
-        let released = false;
-        return () => {
-          if (!released) {
-            released = true;
-            retained--;
-            releaseOwner();
-          }
-        };
+        return retainOwner();
       },
       provision: async <T>(run: () => Promise<T>, signal?: AbortSignal) =>
         await withLocalWorkspaceProjection(
@@ -117,10 +131,19 @@ export async function prepareLocalSandboxWorkspace(params: {
           },
           { provision: true, signal },
         ),
-      checkpoint: async () => {
-        // Stop closes execution admission; accepted output still settles under its workspace owner.
-        await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
+      terminate: async (run: () => Promise<void>) => {
+        // Cancellation can join a checkpoint after the exec's finalization has started.
+        const release = retainOwner();
+        try {
+          await withLocalWorkspaceProjection(owner, run, { provision: true });
+          // TERM handlers may write after an already-running final checkpoint has completed.
+          await checkpoint();
+        } finally {
+          release();
+        }
       },
+      // Stop closes execution admission; accepted output still settles under its workspace owner.
+      checkpoint,
       [Symbol.dispose]: () => {
         disposed = true;
         releaseOwner();
@@ -141,11 +164,44 @@ export function bindLocalSandboxWorkspace(
   if (!backend) {
     throw new Error("Managed guest project has no sandbox execution owner");
   }
+  const persistent = getSandboxPersistentExecCapability(backend);
+  if (persistent) {
+    bindSandboxPersistentExecCapability(backend, {
+      ...persistent,
+      prepare: async (params) => {
+        const prepared = await projection.provision(() =>
+          persistent.prepare({
+            ...params,
+            assertCurrent: () => {
+              projection.assertCurrent();
+              params.assertCurrent();
+            },
+          }),
+        );
+        return {
+          ...prepared,
+          start: (admit: () => Promise<void>) => projection.provision(() => prepared.start(admit)),
+        };
+      },
+    });
+  }
   const prepareCleanup = backend.prepareProcessCleanup?.bind(backend);
   if (prepareCleanup) {
     backend.prepareProcessCleanup = (env) => {
       projection.assertCurrent();
-      return prepareCleanup(env);
+      const cleanup = prepareCleanup(env);
+      return {
+        env: cleanup.env,
+        terminate: () => projection.terminate(() => cleanup.terminate()),
+        interrupt: (timeoutMs) => {
+          const signal = AbortSignal.timeout(timeoutMs);
+          const deadline = performance.now() + timeoutMs;
+          return projection.provision(() => {
+            signal.throwIfAborted();
+            return cleanup.interrupt(Math.max(0, Math.ceil(deadline - performance.now())));
+          }, signal);
+        },
+      };
     };
   }
   const shell = backend.runShellCommand.bind(backend);

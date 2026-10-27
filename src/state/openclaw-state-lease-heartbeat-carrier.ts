@@ -4,6 +4,8 @@ import {
   type Transferable,
   type Worker,
 } from "node:worker_threads";
+import { postgresPoolTransferList } from "../infra/postgres-sync/pool.js";
+import { receiveWorkerMemoryPort } from "../infra/worker-cpu.js";
 import { recordWorkerMessage } from "../infra/worker-message-metrics.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -19,7 +21,6 @@ type Member = {
   closed: ReturnType<typeof createDeferredCore<number>>;
   message?: (reply: CarrierReply) => void;
   failure?: (error: unknown, exitCode?: number, registrationClosed?: boolean) => void;
-  service: () => void;
   stopping: boolean;
 };
 type Carrier = {
@@ -40,7 +41,6 @@ export function acquireLeaseHeartbeatCarrier(params: {
   key: string;
   data: LeaseHeartbeatWorkerData;
   createWorker(): Worker;
-  service: () => void;
 }) {
   let carrier = carriers.get(params.key);
   const primary = carrier === undefined;
@@ -85,7 +85,6 @@ export function acquireLeaseHeartbeatCarrier(params: {
   const member: Member = {
     channel: ports?.port1 ?? owned.worker,
     closed: createDeferredCore<number>(),
-    service: params.service,
     stopping: false,
   };
   owned.members.add(member);
@@ -126,6 +125,9 @@ export function acquireLeaseHeartbeatCarrier(params: {
     }
   };
   const receive = (reply: CarrierReply) => {
+    if (primary && receiveWorkerMemoryPort(owned.worker, reply)) {
+      return;
+    }
     if (ports) {
       recordWorkerMessage("lifecycle", "from_worker");
     }
@@ -145,6 +147,7 @@ export function acquireLeaseHeartbeatCarrier(params: {
     try {
       owned.worker.postMessage({ registration: params.data, port: ports.port2 }, [
         params.data.databaseAdmissionPort,
+        ...postgresPoolTransferList(params.data.postgresPool),
         ports.port2,
       ]);
     } catch (error) {
@@ -155,7 +158,6 @@ export function acquireLeaseHeartbeatCarrier(params: {
     }
   }
   return {
-    renewalProgress: owned.renewalProgress,
     online: owned.online.promise,
     closed: member.closed.promise,
     get pending() {
@@ -173,12 +175,6 @@ export function acquireLeaseHeartbeatCarrier(params: {
       member.channel.postMessage(value, transferList);
       if (ports) {
         recordWorkerMessage("lifecycle", "to_worker");
-      }
-    },
-    service() {
-      // Synchronous lease verification must also service a sibling's admission.
-      for (const active of owned.members) {
-        active.service();
       }
     },
     close(): Promise<number> {
