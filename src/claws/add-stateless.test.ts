@@ -332,10 +332,11 @@ describe("stateless Claw Add", () => {
         introducedPackage,
         reusedPackage,
       ]);
-      vi.spyOn(mcpInstall, "installClawMcpServersStateless").mockResolvedValueOnce([
-        introducedMcp,
-        reusedMcp,
-      ]);
+      vi.spyOn(mcpInstall, "installClawMcpServersStateless").mockImplementationOnce(
+        async (_plan, { refs }) => {
+          refs.push(introducedMcp, reusedMcp);
+        },
+      );
 
       const result = await apply(plan, {
         commitConfig: async () => {
@@ -362,6 +363,63 @@ describe("stateless Claw Add", () => {
       expect(existsSync(plan.agent.workspace)).toBe(false);
     },
   );
+
+  const configuredMcpNames = async () => {
+    const listed = await mcpConfig.listConfiguredMcpServers();
+    assert(listed.ok, "MCP config unreadable");
+    return Object.keys(listed.mcpServers);
+  };
+  const mcpAction = (name: string) => ({
+    kind: "mcpServer" as const,
+    id: name,
+    action: "configure" as const,
+    target: `mcp.servers.${name}`,
+    details: configured,
+    blocked: false,
+  });
+
+  it("removes an MCP server whose config write commits and then fails", async () => {
+    const plan = await buildPlan();
+    plan.actions.push(mcpAction("new-server"));
+    const write = mcpMutation.setConfiguredMcpServer;
+    vi.spyOn(mcpMutation, "setConfiguredMcpServer").mockImplementation(async (params) => {
+      await write(params);
+      throw new Error("post-write failure");
+    });
+
+    const result = await apply(plan);
+
+    expect(result.error).toMatchObject({ code: "add_failed", message: "post-write failure" });
+    expect(result.mcpServers).toEqual([]);
+    expect(await configuredMcpNames()).toEqual([]);
+  });
+
+  it("removes earlier MCP servers when a later action fails before its write", async () => {
+    const plan = await buildPlan();
+    plan.actions.push(mcpAction("first-server"), mcpAction("second-server"));
+    const list = mcpConfig.listConfiguredMcpServers;
+    let lists = 0;
+    vi.spyOn(mcpConfig, "listConfiguredMcpServers").mockImplementation(async () => {
+      lists += 1;
+      return await list();
+    });
+    let failed = false;
+
+    // The second action's list is the second call; its post-list check fails once.
+    const result = await apply(plan, {
+      assertCurrent: () => {
+        if (lists === 2 && !failed) {
+          failed = true;
+          throw new Error("lease lost");
+        }
+      },
+    });
+
+    expect(failed).toBe(true);
+    expect(result.error).toMatchObject({ code: "add_failed", message: "lease lost" });
+    expect(result.mcpServers).toEqual([]);
+    expect(await configuredMcpNames()).toEqual([]);
+  });
 });
 
 const checklist = "# Checklist\nCheck active incidents.\n";
