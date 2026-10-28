@@ -1,13 +1,21 @@
 import { t } from "../../i18n/index.ts";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
+import { copyToClipboard } from "../../lib/clipboard.ts";
+import { showToast } from "../../lib/toast.ts";
 import type { AnnotationStroke } from "./browser-annotation.ts";
-import type { BrowserRequestClient, BrowserInspectedNode } from "./browser-client.ts";
+import type {
+  BrowserRequestClient,
+  BrowserInspectedNode,
+  BrowserSelection,
+} from "./browser-client.ts";
 import {
+  BROWSER_SELECTION_LIMIT,
   clickBrowserCoords,
   inspectBrowserElementAt,
   insertBrowserText,
   isBrowserEvaluateDisabledError,
   pressBrowserKey,
+  readBrowserSelection,
   scrollBrowserBy,
 } from "./browser-client.ts";
 import type { BrowserPanelOperations } from "./browser-panel-operation-ownership.ts";
@@ -63,6 +71,22 @@ type BrowserPanelDrawingGesture = {
   captureTarget: HTMLElement;
   stroke: AnnotationStroke;
 };
+
+const COPY_FAILURE_TEXT = {
+  empty: "browser.copyNothingSelected",
+  unavailable: "browser.copyUnavailable",
+  unreadable: "browser.copyReadFailed",
+  write: "browser.copyWriteFailed",
+} as const;
+
+/** What the remote page offers the Copy selection action; stale means the panel moved on. */
+export type BrowserSelectionProbe =
+  | "selected"
+  | "empty"
+  | "unreadable"
+  | "unavailable"
+  | "disconnected"
+  | "stale";
 
 /** Owns pointer, keyboard, annotation, and inspection input for the browser surface. */
 export class BrowserPanelInputOwner {
@@ -343,6 +367,18 @@ export class BrowserPanelInputOwner {
     if (this.host.mode !== "interact" || !this.host.view) {
       return;
     }
+    const shortcut =
+      (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey
+        ? event.key.toLowerCase()
+        : "";
+    if ((shortcut === "c" || shortcut === "x") && !event.isComposing) {
+      // Modified keys are never forwarded, so copy and cut stay local: the page's selection is
+      // read back instead. Taking the key here also keeps WebKit, which skips the native copy
+      // event for the empty input, working.
+      event.preventDefault();
+      this.copySelection({ cut: shortcut === "x" });
+      return;
+    }
     if (
       event.isComposing ||
       event.keyCode === 229 ||
@@ -372,6 +408,134 @@ export class BrowserPanelInputOwner {
     if (text) {
       this.runAfterClick((client, targetId) => insertBrowserText(client, { targetId, text }));
     }
+  }
+
+  /** Native copy and cut events (menus, context menu); the page's selection is read asynchronously. */
+  handleViewportCopy(event: ClipboardEvent): void {
+    if (!this.host.view) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    this.copySelection({ cut: event.type === "cut" });
+  }
+
+  private selectionScope() {
+    const targetId = this.host.activeTargetId;
+    const client = this.host.operations.captureClient();
+    if (!targetId || !client || this.host.view?.targetId !== targetId) {
+      return null;
+    }
+    const epoch = this.host.operations.epoch;
+    const generation = this.inputGeneration;
+    return {
+      client,
+      targetId,
+      // Only the tab and connection that started the read may publish its result.
+      current: () =>
+        this.host.operations.isLive(epoch, client) &&
+        this.host.activeTargetId === targetId &&
+        this.host.view?.targetId === targetId &&
+        this.inputGeneration === generation,
+    };
+  }
+
+  /** Reports whether the page has selected text, without moving that text to the panel. */
+  async probeSelection(): Promise<BrowserSelectionProbe> {
+    const scope = this.selectionScope();
+    if (!scope) {
+      return "disconnected";
+    }
+    if (this.host.evaluateUnavailable) {
+      return "unavailable";
+    }
+    try {
+      const selection = await readBrowserSelection(scope.client, {
+        targetId: scope.targetId,
+        probeOnly: true,
+      });
+      return !scope.current()
+        ? "stale"
+        : !selection
+          ? "unreadable"
+          : selection.length > 0
+            ? "selected"
+            : "empty";
+    } catch (error) {
+      return this.classifySelectionFailure(error, scope.current);
+    }
+  }
+
+  /** Scripting disabled by config is remembered, as every other page action does. */
+  private classifySelectionFailure(error: unknown, current: () => boolean) {
+    if (!current()) {
+      return "stale";
+    }
+    if (isBrowserEvaluateDisabledError(error)) {
+      this.host.setState("evaluateUnavailable", true);
+      return "unavailable";
+    }
+    return "unreadable";
+  }
+
+  /**
+   * Copies the page's selected text to the local clipboard. The text is only known after a round
+   * trip, so the pending read goes to the clipboard while the gesture is live. A cut also deletes
+   * a selection inside an editable field once the copy succeeded.
+   */
+  copySelection(options: { cut?: boolean } = {}): void {
+    const toast = (key: string) => showToast({ message: t(key), severity: "error" });
+    const scope = this.selectionScope();
+    if (!scope) {
+      toast("browser.copyDisconnected");
+      return;
+    }
+    if (this.host.evaluateUnavailable) {
+      toast("browser.copyUnavailable");
+      return;
+    }
+    const { client, targetId, current } = scope;
+    let selection: BrowserSelection | null = null;
+    // Why the clipboard stayed untouched. A stale result names no page, so it stays silent.
+    let failure: "stale" | "unreadable" | "unavailable" | "empty" | "write" = "stale";
+    const read = async () => {
+      // Typed text and clicks queued before the copy reach the page first.
+      await Promise.all([this.pendingClick, this.pendingText]);
+      if (!current()) {
+        throw new Error("stale");
+      }
+      try {
+        selection = await readBrowserSelection(client, { targetId });
+      } catch (error) {
+        failure = this.classifySelectionFailure(error, current);
+        throw error;
+      }
+      if (!current()) {
+        failure = "stale";
+      } else if (!selection?.text) {
+        failure = selection ? "empty" : "unreadable";
+      } else {
+        failure = "write";
+        return selection.text;
+      }
+      throw new Error(failure);
+    };
+    void copyToClipboard(read(), current).then((copied) => {
+      if (copied) {
+        showToast({
+          message: selection?.truncated
+            ? t("browser.copyTruncated", { count: String(BROWSER_SELECTION_LIMIT) })
+            : t("common.copied"),
+        });
+        if (options.cut && selection?.editable) {
+          this.runAfterClick((actionClient, id) =>
+            pressBrowserKey(actionClient, { targetId: id, key: "Delete" }),
+          );
+        }
+      } else if (failure !== "stale") {
+        toast(COPY_FAILURE_TEXT[failure]);
+      }
+    });
   }
 
   private runAfterClick(
