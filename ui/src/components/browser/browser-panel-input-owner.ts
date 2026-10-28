@@ -395,7 +395,7 @@ export class BrowserPanelInputOwner {
       : null;
   }
 
-  /** Inserted text carries no key events, so text queued behind a slow request shares the next one. */
+  /** Text queued behind a slow request joins the next insertion. */
   private queueText(text: string): void {
     const target = this.admittedTarget();
     if (!target) {

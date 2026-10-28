@@ -289,7 +289,7 @@ it("defers a retained panel refresh to its pending card choice", async () => {
   await panel.updateComplete;
   expect(gateway.request).toHaveBeenCalledTimes(beforePresentation);
 
-  // The wheel scrolls the page it was aimed at; nothing may follow the later card choice.
+  // The first wheel scrolls at once; nothing follows the card choice.
   panel.querySelector(".bp-viewport")!.dispatchEvent(wheel());
   const beforeChoice = requests(gateway).length;
   chooseCard(panel, nodeTab);
@@ -415,7 +415,6 @@ it("discards an old route capture with the same target id before fetching or eva
   await waitForSolid(() =>
     expect(requests(gateway).some((request) => request.path === "/screenshot")).toBe(true),
   );
-  const beforeChoice = requests(gateway).length;
   chooseCard(panel, nodeTab);
   await waitForTitle(panel, "work");
   pending.resolve({ path: "/stale.png", targetId: "t1", url: "https://managed.example/" });
@@ -428,11 +427,10 @@ it("discards an old route capture with the same target id before fetching or eva
       return url.includes("stale");
     }),
   ).toBe(false);
-  // Geometry is requested with the screenshot; nothing may be evaluated once the route changed.
   expect(
-    requests(gateway)
-      .slice(beforeChoice)
-      .some((request) => request.path === "/act" && request.query?.profile === "managed"),
+    requests(gateway).some(
+      (request) => request.path === "/act" && request.query?.profile === "managed",
+    ),
   ).toBe(false);
 });
 

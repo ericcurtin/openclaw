@@ -54,7 +54,7 @@ interface BrowserPanelSnapshotHost extends BrowserPanelStateWriter<
 
 /** Coordinates remote tab snapshots and their owned page images and input metrics. */
 export function createBrowserPanelSnapshot(controller: BrowserPanelSnapshotHost) {
-  /** The page settles while the action runs; only the time left after its response remains. */
+  /** Time the action already took counts toward the settle delay. */
   function scheduleRefresh(epoch: number, current: () => boolean, elapsedMs: number): void {
     controller.pendingInput.scheduleRefresh(
       Math.max(0, ACTION_REFRESH_DELAY_MS - elapsedMs),
@@ -64,6 +64,7 @@ export function createBrowserPanelSnapshot(controller: BrowserPanelSnapshotHost)
         }
       },
       () => !controller.operations.hasPendingCapture,
+      ACTION_REFRESH_DELAY_MS,
     );
   }
 
@@ -158,17 +159,6 @@ export function createBrowserPanelSnapshot(controller: BrowserPanelSnapshotHost)
       captureRevision = stream.frameRevision;
       const route = controller.operations.route;
       const host = controller.host;
-      // Page geometry does not depend on the screenshot: ask for both at once. The URL check
-      // below still rejects metrics from another document.
-      const metricsRead = readBrowserPanelOwnedMetrics(
-        client,
-        targetId,
-        controller.evaluateUnavailable,
-        captureCurrent,
-        () => controller.setState("evaluateUnavailable", true),
-      );
-      // A failed screenshot supersedes this read; the await below still surfaces its error.
-      void metricsRead.catch(() => undefined);
       const shot = await captureBrowserScreenshot(client, targetId);
       if (!captureCurrent()) {
         return;
@@ -180,7 +170,13 @@ export function createBrowserPanelSnapshot(controller: BrowserPanelSnapshotHost)
           authToken: host.authToken,
           path: shot.path,
         }),
-        metricsRead,
+        readBrowserPanelOwnedMetrics(
+          client,
+          targetId,
+          controller.evaluateUnavailable,
+          captureCurrent,
+          () => controller.setState("evaluateUnavailable", true),
+        ),
       ]);
       if (!captureCurrent()) {
         return;

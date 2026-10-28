@@ -98,7 +98,7 @@ it("drops a pending pen scroll when capture state resets", async () => {
   controller.input.resetCaptureState();
   input.dispatchEvent(pointer("pointermove", 1, 50, 10, "pen"));
   await settle();
-  // Only the delta sent before the reset scrolls; the queued one and the later move are dropped.
+  // Only the delta sent before the reset scrolls.
   expect(scrolls()).toEqual([["0", "30"]]);
 });
 

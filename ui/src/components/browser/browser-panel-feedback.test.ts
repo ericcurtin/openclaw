@@ -17,9 +17,18 @@ const latestCapture = { path: "/latest.png", targetId: "raw-a", url: latestUrl }
 function setupFeedback() {
   stubScreenshotMedia();
   const screenshot = vi.fn(async () => latestCapture);
-  const { client } = createBrowserClient(async (envelope) =>
-    envelope.path === "/screenshot" ? screenshot() : metrics(latestUrl, "Latest"),
-  );
+  const action = { ms: 0 };
+  const { client } = createBrowserClient(async (envelope) => {
+    if (envelope.path === "/screenshot") {
+      return screenshot();
+    }
+    if (envelope.body?.kind === "press") {
+      await new Promise((resolve) => {
+        setTimeout(resolve, action.ms);
+      });
+    }
+    return metrics(latestUrl, "Latest");
+  });
   const controller = createBrowserPanelTestController(client, "tab-a");
   async function type(key: string, count = 1, delay = 350) {
     for (let index = 0; index < count; index += 1) {
@@ -27,7 +36,7 @@ function setupFeedback() {
       await vi.advanceTimersByTimeAsync(delay);
     }
   }
-  return { controller, screenshot, type };
+  return { controller, screenshot, type, action };
 }
 
 it("refreshes fallback feedback during continuous input instead of waiting for idle", async () => {
@@ -57,25 +66,24 @@ it("keeps a slow fallback capture and delivers trailing input feedback", async (
   controller.suspendView();
 });
 
-it("counts a slow action response toward the fallback settle delay", async () => {
-  stubScreenshotMedia();
-  const press = createDeferred<{ ok: true }>();
-  const screenshot = vi.fn(async () => latestCapture);
-  const { client } = createBrowserClient(async (envelope) => {
-    if (envelope.path === "/screenshot") {
-      return screenshot();
-    }
-    return envelope.body?.kind === "press" ? press.promise : metrics(latestUrl, "Latest");
-  });
-  const controller = createBrowserPanelTestController(client, "tab-a");
-  controller.input.handleViewportKeydown(new KeyboardEvent("keydown", { key: "a" }));
-  await vi.advanceTimersByTimeAsync(300);
-  press.resolve({ ok: true });
-  await vi.advanceTimersByTimeAsync(49);
+it("counts a slow action toward the settle delay and paces retries behind a pending capture", async () => {
+  const capture = createDeferred<typeof latestCapture>();
+  const { controller, screenshot, type, action } = setupFeedback();
+  action.ms = 300;
+  await type("a", 1, 349);
   expect(screenshot).not.toHaveBeenCalled();
-  // The page already settled for 300 ms while the action ran; 50 ms of the 350 ms remain.
+  screenshot.mockImplementationOnce(() => capture.promise);
+  // 300 of the 350 ms passed during the action.
   await vi.advanceTimersByTimeAsync(1);
   expect(screenshot).toHaveBeenCalledTimes(1);
+  // No delay is left, but retries stay paced.
+  action.ms = 400;
+  await type("b", 1, 500);
+  capture.resolve(latestCapture);
+  await vi.advanceTimersByTimeAsync(200);
+  expect(screenshot).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(200);
+  expect(screenshot).toHaveBeenCalledTimes(2);
   controller.suspendView();
 });
 
@@ -101,7 +109,7 @@ it.each([true, false])(
       expect.stringContaining("window.scrollBy(5, 60)"),
       expect.stringContaining("window.scrollBy(10, 50)"),
     ]);
-    // An idle window ends the throttle, so the next wheel scrolls at once again.
+    // An idle window resets the throttle.
     await vi.advanceTimersByTimeAsync(delay);
     wheel(0, 20);
     expect(request).toHaveBeenCalledTimes(3);

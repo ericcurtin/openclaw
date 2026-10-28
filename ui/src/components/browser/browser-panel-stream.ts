@@ -478,7 +478,7 @@ export class BrowserPanelStream {
     if (!attempt || !this.current(attempt) || !this.resized(attempt)) {
       return;
     }
-    // Restart once the layout stops changing, not on a fixed deadline during a long drag.
+    // Restart once the layout stops changing.
     clearTimeout(this.resizeTimer);
     this.resizeTimer = setTimeout(() => {
       this.resizeTimer = undefined;
