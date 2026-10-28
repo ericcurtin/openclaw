@@ -339,7 +339,7 @@ systemd does not retry: the unit stays `failed` and the Gateway stays down until
 run Doctor. The service log names the cause, for example:
 
 ```text
-OpenClaw agent database /home/user/.openclaw/agents/main/agent/openclaw-agent.sqlite uses schema version 24; stop active agents and run openclaw doctor --fix to migrate session identities before using it.
+OpenClaw agent database /home/user/.openclaw/agents/main/agent/openclaw-agent.sqlite uses schema version 24; stop active agents and run openclaw doctor --fix to upgrade it to schema version 38 before using it.
 ```
 
 After each image upgrade, check the unit and recover if it failed:
