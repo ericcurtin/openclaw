@@ -1,4 +1,5 @@
 import { createContainerEnvFile } from "../../infra/container-env-file.js";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { buildGitHubExecLaunchArgv } from "../github-exec-launch.js";
 import { CLEARED_GITHUB_CREDENTIALS } from "../github-host.js";
@@ -17,6 +18,14 @@ import {
   removeSandboxContainerRuntime,
 } from "./container-lifecycle.js";
 import {
+  bindDockerPersistentTarget,
+  captureDockerPersistentTarget,
+  dockerPersistentTargetToEngineTarget,
+  dockerPersistentTargetFromEngineTarget,
+  readDockerPersistentContainer,
+} from "./docker-persistent-target.js";
+import {
+  allocateSandboxContainer,
   containerState,
   bindPodmanSandboxEngine,
   DOCKER_SANDBOX_ENGINE,
@@ -24,13 +33,16 @@ import {
   execContainer,
   execContainerRaw,
   PODMAN_SANDBOX_ENGINE,
-  resolvePodmanSandboxRuntimeInfo,
   type SandboxContainerEngine,
   type SandboxContainerEngineTarget,
   validateSandboxContainerEngineTarget,
 } from "./docker.js";
 import { bindSandboxInputStager, createSandboxInputStager } from "./input-staging.js";
 import { resolveSandboxContainerOnlyMounts } from "./mount-plan.js";
+import {
+  bindSandboxPersistentExecCapability,
+  type SandboxPersistentExecCommand,
+} from "./persistent-exec.types.js";
 import { createSandboxProcessCleanup } from "./process-cleanup.js";
 import type { SandboxRegistryEntry } from "./registry.js";
 
@@ -42,6 +54,7 @@ async function createContainerSandboxBackend(
   operatorAuthority?: AdmittedRunOperatorAuthority,
   githubIdentity?: PreparedGitHubToolEnvironment,
 ): Promise<SandboxBackendHandle> {
+  using phases = observeDiagnosticsTimelinePhases("attempt.setup.sandbox.backend.target");
   const assertCurrent = () => {
     operatorAuthority?.assertCurrent();
     params.assertRuntimeCurrent?.();
@@ -52,42 +65,50 @@ async function createContainerSandboxBackend(
       "Podman sandboxing does not support browser sandboxes. Install Docker and select the docker backend, or disable sandbox.browser.enabled.",
     );
   }
-  const podmanTarget =
-    engine.id === "podman" ? (await resolvePodmanSandboxRuntimeInfo()).target : undefined;
-  const boundEngine = podmanTarget ? bindPodmanSandboxEngine(podmanTarget) : engine;
-  const { containerName, containerId } = await ensureSandboxContainer({
-    engine: boundEngine,
-    ...(podmanTarget ? { podmanTarget } : {}),
-    scopeKey: params.scopeKey,
-    workspaceDir: params.workspaceDir,
-    workspaceSource: params.workspaceSource,
-    assertCurrent,
-    operatorAuthority,
-    agentWorkspaceDir: params.agentWorkspaceDir,
-    skillsWorkspaceDir: params.skillsWorkspaceDir,
-    readOnlyResourceMounts: params.readOnlyResourceMounts,
-    cfg: params.cfg,
-    ...(params.requireCurrentConfig !== undefined
-      ? { requireCurrentConfig: params.requireCurrentConfig }
-      : {}),
-  });
+  const dockerTarget = engine.id === "docker" ? await captureDockerPersistentTarget() : undefined;
   assertCurrent();
+  const configuredEngine = dockerTarget ? bindDockerPersistentTarget(dockerTarget) : engine;
+  phases.mark("attempt.setup.sandbox.backend.container");
+  const { containerName, containerId, configHash, mountPlan, currentConfig, podmanTarget } =
+    await ensureSandboxContainer({
+      engine: configuredEngine,
+      ...(dockerTarget ? { dockerTarget } : {}),
+      scopeKey: params.scopeKey,
+      workspaceDir: params.workspaceDir,
+      workspaceSource: params.workspaceSource,
+      assertCurrent,
+      operatorAuthority,
+      agentWorkspaceDir: params.agentWorkspaceDir,
+      skillsWorkspaceDir: params.skillsWorkspaceDir,
+      readOnlyResourceMounts: params.readOnlyResourceMounts,
+      cfg: params.cfg,
+      ...(params.requireCurrentConfig !== undefined
+        ? { requireCurrentConfig: params.requireCurrentConfig }
+        : {}),
+    });
+  assertCurrent();
+  const boundEngine = podmanTarget ? bindPodmanSandboxEngine(podmanTarget) : configuredEngine;
   // Allocation pins the generation under its lifecycle lock; never rediscover it
   // by reusable name after another admission or recreation can acquire the lock.
+  phases.mark("attempt.setup.sandbox.backend.mount_snapshot");
   const containerOnlyMounts = await resolveSandboxContainerOnlyMounts({
     engine: boundEngine,
     containerName: containerId,
     assertCurrent,
   });
   assertCurrent();
+  phases.mark("attempt.setup.sandbox.backend.bridge_import");
   const { createSandboxFsBridge } = await import("./fs-bridge.js");
   assertCurrent();
+  phases.mark("attempt.setup.sandbox.backend.handle");
   const { workdir: defaultWorkdir, env: configuredEnv, image } = params.cfg.docker;
+  const engineTarget =
+    podmanTarget ?? (dockerTarget ? dockerPersistentTargetToEngineTarget(dockerTarget) : undefined);
   const run = (command: SandboxBackendCommandParams, assertCommandCurrent?: () => void) =>
     runContainerSandboxShellCommand({
       engine: boundEngine,
       containerName: containerId,
-      podmanTarget,
+      engineTarget,
       ...command,
       assertCurrent: assertCommandCurrent,
     });
@@ -104,7 +125,7 @@ async function createContainerSandboxBackend(
       readOnlyResourceMounts: true,
     },
     async buildExecSpec({ command, workdir, env: requestedEnv, usePty, stdin }) {
-      await validateSandboxContainerEngineTarget(boundEngine, podmanTarget);
+      await validateSandboxContainerEngineTarget(boundEngine, engineTarget);
       const identity = githubIdentity;
       const githubProfileDir = identity?.localIdentityEnv.GH_CONFIG_DIR;
       const externalCommandShell =
@@ -154,7 +175,7 @@ async function createContainerSandboxBackend(
                 externalCommandShell,
               })
             : argv,
-          env: process.env,
+          env: boundEngine.baseEnv ?? process.env,
           stdinMode: usePty || stdin ? "pipe-open" : "pipe-closed",
           finalizeToken: envFile.cleanup satisfies ContainerExecFinalizeToken,
         };
@@ -230,6 +251,90 @@ async function createContainerSandboxBackend(
     );
     return bridge;
   };
+  if (dockerTarget && configHash && currentConfig) {
+    phases.mark("attempt.setup.sandbox.backend.persistent_generation");
+    const container = await readDockerPersistentContainer(
+      boundEngine,
+      containerId,
+      AbortSignal.timeout(30_000),
+    );
+    assertCurrent();
+    if (container.kind !== "running") {
+      throw new Error("The admitted Docker sandbox container ended during preparation.");
+    }
+    phases.mark("attempt.setup.sandbox.backend.persistent_capability");
+    const allocation = structuredClone({
+      cfg: params.cfg.docker,
+      dockerTmpfsSource: params.cfg.dockerTmpfsSource,
+      workspaceDir: params.workspaceDir,
+      workspaceAccess: params.cfg.workspaceAccess,
+      agentWorkspaceDir: params.agentWorkspaceDir,
+      skillsWorkspaceDir: params.skillsWorkspaceDir,
+      scopeKey: params.scopeKey,
+      configHash,
+      mountPlan,
+    });
+    let imageId: Promise<string> | undefined;
+    const resolveImage = () => {
+      assertCurrent();
+      return (imageId ??= (async () => {
+        const inspected = await execContainer(
+          boundEngine,
+          ["image", "inspect", "--format", "{{.Id}}", allocation.cfg.image],
+          { signal: AbortSignal.timeout(30_000) },
+        );
+        assertCurrent();
+        const id = inspected.stdout.trim();
+        if (!/^sha256:[a-f0-9]{64}$/u.test(id)) {
+          throw new Error("Persistent sandbox execution requires an immutable Docker image ID.");
+        }
+        return id;
+      })());
+    };
+    const capabilityParams = {
+      target: dockerTarget,
+      containerId,
+      containerName,
+      containerStartedAt: container.startedAt,
+      workdir: params.cfg.docker.workdir,
+      configHash,
+      imageReference: allocation.cfg.image,
+      resolveImage,
+      assertCurrent,
+      async allocate(input: {
+        name: string;
+        command: SandboxPersistentExecCommand;
+        labels: Record<string, string>;
+        assertCurrent: () => void;
+      }) {
+        const assertAllocationCurrent = () => {
+          assertCurrent();
+          input.assertCurrent();
+        };
+        assertAllocationCurrent();
+        const resolvedImageId = await resolveImage();
+        assertAllocationCurrent();
+        return await allocateSandboxContainer({
+          ...allocation,
+          cfg: { ...allocation.cfg, image: resolvedImageId },
+          engine: boundEngine,
+          name: input.name,
+          command: input.command,
+          labels: input.labels,
+          assertCurrent: assertAllocationCurrent,
+        });
+      },
+    };
+    bindSandboxPersistentExecCapability(handle, {
+      ...capabilityParams,
+      async prepare(preparation) {
+        const { createDockerPersistentExecCapability } =
+          await import("./docker-persistent-exec.js");
+        assertCurrent();
+        return await createDockerPersistentExecCapability(capabilityParams).prepare(preparation);
+      },
+    });
+  }
   return handle;
 }
 
@@ -263,11 +368,11 @@ async function runContainerSandboxShellCommand(
   params: {
     engine: SandboxContainerEngine;
     containerName: string;
-    podmanTarget?: SandboxContainerEngineTarget;
+    engineTarget?: SandboxContainerEngineTarget;
     assertCurrent?: () => void;
   } & SandboxBackendCommandParams,
 ) {
-  await validateSandboxContainerEngineTarget(params.engine, params.podmanTarget);
+  await validateSandboxContainerEngineTarget(params.engine, params.engineTarget);
   const dockerArgs = [
     "exec",
     "-i",
@@ -292,9 +397,9 @@ async function runContainerSandboxShellCommand(
 function createContainerSandboxBackendManager(
   engine: SandboxContainerEngine,
 ): SandboxBackendManager {
-  const resolvePodmanTarget = (entry: SandboxRegistryEntry) => {
+  const resolveTarget = (entry: SandboxRegistryEntry) => {
     if (engine.id !== "podman") {
-      return undefined;
+      return entry.backendTarget;
     }
     if (entry.backendTarget) {
       return entry.backendTarget;
@@ -306,11 +411,17 @@ function createContainerSandboxBackendManager(
       { code: "INVALID_CONFIG" },
     );
   };
+  const bindTarget = (target: SandboxContainerEngineTarget | undefined) =>
+    target
+      ? engine.id === "podman"
+        ? bindPodmanSandboxEngine(target)
+        : bindDockerPersistentTarget(dockerPersistentTargetFromEngineTarget(target))
+      : engine;
   return {
     async describeRuntime({ entry, config, agentId }) {
-      const podmanTarget = resolvePodmanTarget(entry);
-      await validateSandboxContainerEngineTarget(engine, podmanTarget);
-      const runtimeEngine = podmanTarget ? bindPodmanSandboxEngine(podmanTarget) : engine;
+      const target = resolveTarget(entry);
+      await validateSandboxContainerEngineTarget(engine, target);
+      const runtimeEngine = bindTarget(target);
       const state = await containerState(runtimeEngine, entry.containerName);
       let actualConfigLabel = entry.image;
       let actualImageId: string | undefined;
@@ -368,9 +479,9 @@ function createContainerSandboxBackendManager(
       };
     },
     async removeRuntime({ entry }) {
-      const podmanTarget = resolvePodmanTarget(entry);
-      await validateSandboxContainerEngineTarget(engine, podmanTarget);
-      const runtimeEngine = podmanTarget ? bindPodmanSandboxEngine(podmanTarget) : engine;
+      const target = resolveTarget(entry);
+      await validateSandboxContainerEngineTarget(engine, target);
+      const runtimeEngine = bindTarget(target);
       await removeSandboxContainerRuntime(runtimeEngine, entry.containerName);
     },
   };
