@@ -69,6 +69,7 @@ export async function runEmbeddedAttempt(
   const modelExecution = bindOperatorModelExecution(readRunOperatorAuthority(input), {
     provider: input.provider,
     model: input.modelId,
+    cyberAccessProgram: input.cyberAccessProgram,
   });
   try {
     const attempt = modelExecution
@@ -95,6 +96,7 @@ export async function runEmbeddedAttempt(
     modelExecution?.assertCurrent();
     return result;
   } finally {
+    input.continuation = undefined;
     modelExecution?.release();
   }
 }
@@ -138,8 +140,7 @@ async function runEmbeddedAttemptOwned(
   let toolSearchCatalogApplied = false;
   let releasePreparedTools: ((reason: string) => Promise<void>) | undefined;
   let toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor | undefined;
-  let abortSessionForYield: (() => void) | null = null;
-  let queueYieldInterruptForSession: (() => void) | null = null;
+  let unsubscribeYieldTurnEnd: (() => void) | undefined;
   const sessionResources = createEmbeddedAttemptSessionResources(runAbortController.signal);
   const cleanupStep = (step: string, cleanup: () => Promise<void>) =>
     runOwnedAgentCleanup({
@@ -252,9 +253,6 @@ async function runEmbeddedAttemptOwned(
           yieldMessage = message;
           yieldAcknowledgment = acknowledgment;
           yieldMessageWaitRegistered = messageWaitRegistered;
-          queueYieldInterruptForSession?.();
-          runAbortController.abort(SESSIONS_YIELD_ABORT_REASON);
-          abortSessionForYield?.();
         },
         runAbortController,
         runTrace,
@@ -322,7 +320,8 @@ async function runEmbeddedAttemptOwned(
     );
     // Close the inclusive checkpoint; the owner spans exclude preparation admission.
     prepStages.mark("tool-preparation");
-    const { effectiveTools, toolSearch, toolSearchRunPlan } = preparedToolCatalog;
+    const { effectiveTools, toolSearch, toolSearchRunPlan, deferredDirectoryToolsCallable } =
+      preparedToolCatalog;
     toolSearchCatalogApplied = toolSearch.catalogRegistered;
     const preparedSystemPrompt = await prepare("attempt.system-prompt", () =>
       prepareEmbeddedAttemptSystemPrompt({
@@ -331,7 +330,6 @@ async function runEmbeddedAttemptOwned(
         setup,
         bootstrap: preparedBootstrap,
         capabilityToolNames: toolSearchRunPlan.capabilityToolNames,
-        requireExplicitMessageTarget: preparedToolBase.requireExplicitMessageTarget,
         effectiveTools,
         isRawModelRun,
         modelToolsEnabled: toolsEnabled,
@@ -340,6 +338,7 @@ async function runEmbeddedAttemptOwned(
         webSearchUnconfigured: () => preparedToolBase.webSearchUnconfigured,
         toolSearchCatalogRef,
         toolSearchDirectoryEnabled: toolSearchControlsEnabledForRun && toolSearch.catalogRegistered,
+        deferredToolsDirectlyCallable: deferredDirectoryToolsCallable,
         toolSearchRuntimeConfig,
       }),
     );
@@ -368,12 +367,20 @@ async function runEmbeddedAttemptOwned(
           externalAbortController,
           resources: sessionResources.resources,
           onSessionYieldReady: ({ abortActiveSession, activeSession }) => {
-            abortSessionForYield = () => {
-              yieldAbortSettled = abortActiveSession(SESSIONS_YIELD_ABORT_REASON);
-            };
-            queueYieldInterruptForSession = () => {
+            unsubscribeYieldTurnEnd = activeSession.agent.subscribe((event) => {
+              if (
+                event.type !== "turn_end" ||
+                !yieldDetected ||
+                runAbortController.signal.aborted
+              ) {
+                return;
+              }
+              // Keep sibling execution and authority live until their results settle.
+              params.replyOperation?.yield();
               queueSessionsYieldInterruptMessage(activeSession);
-            };
+              runAbortController.abort(SESSIONS_YIELD_ABORT_REASON);
+              yieldAbortSettled = abortActiveSession(SESSIONS_YIELD_ABORT_REASON);
+            });
           },
         }),
       );
@@ -386,7 +393,7 @@ async function runEmbeddedAttemptOwned(
         codeModeControlsEnabled: preparedToolBase.codeModeControlsEnabledForRun,
         onApplied: (surface) => {
           const allowedNames = new Set([
-            ...surface.activeToolNames,
+            ...surface.callableToolNames,
             ...surface.uncompactedEffectiveTools.map((tool) => tool.name),
           ]);
           preparedToolCatalog.applyPromptToolPolicy(allowedNames);
@@ -468,6 +475,8 @@ async function runEmbeddedAttemptOwned(
         ...executionResult,
         codeModeEngaged: codeModeControlsEnabledForRun,
         providerRetryMaxRetries: providerRetry.maxRetries,
+        providerRequestTimeoutExplicit:
+          providerRetry.timeoutMs !== undefined || params.model.requestTimeoutMs !== undefined,
         providerRetryMaxDelayMs: providerRetry.maxRetryDelayMs,
         ...(catalogSession
           ? {
@@ -480,6 +489,8 @@ async function runEmbeddedAttemptOwned(
           : {}),
       };
     } finally {
+      unsubscribeYieldTurnEnd?.();
+      unsubscribeYieldTurnEnd = undefined;
       // Retained tool callbacks must not keep the history after cleanup settles.
       const releasedResources = sessionResources.takeForCleanup();
       // Transfer resources to the session cleanup owner before awaiting it. A
@@ -519,6 +530,9 @@ async function runEmbeddedAttemptOwned(
     }
     throw error;
   } finally {
+    // The logical run owns retry history; settled attempt callbacks need none of it.
+    params.continuation = undefined;
+    input.continuation = undefined;
     const resolveCleanupReason = () => {
       const terminal = projectAgentRunAttemptTerminal(executionState.terminal);
       return terminal.timedOut ||
@@ -539,8 +553,6 @@ async function runEmbeddedAttemptOwned(
             await releasePreparedTools?.(cleanupReason);
             releasePreparedTools = undefined;
             toolSearchCatalogExecutor = undefined;
-            abortSessionForYield = null;
-            queueYieldInterruptForSession = null;
           } catch {
             recordAgentCleanupFailure();
           }

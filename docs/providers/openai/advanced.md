@@ -187,9 +187,9 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     OpenClaw records a temporary observation for that credential, model, and route.
     Ultrafast stays selectable, and the composer's Speed tooltip shows the requested
     and served tiers. Later calls keep requesting the selected tier unless repeated explicit rejections
-    trigger the run-local cooldown below. A response
-    honoring it clears the hint immediately; otherwise the observation expires
-    five minutes after its latest occurrence.
+    trigger the run-local cooldown below. The hint clears one minute after the
+    latest downgrade. Responses honoring the requested tier do not clear it early,
+    so intermittent capacity changes do not repeatedly refresh the model catalog.
 
     If the native OpenAI API explicitly rejects `service_tier` before output,
     tool activity, or active-response steering, OpenClaw automatically retries
@@ -291,9 +291,9 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
   </Accordion>
 
   <Accordion title="Server-side compaction (Responses API)">
-    For store-capable direct OpenAI Responses models (`openai/*` resolved to
-    `api.openai.com`), the OpenAI plugin's OpenClaw stream wrapper auto-enables
-    server-side compaction:
+    With the built-in `legacy` context engine, the OpenAI plugin's OpenClaw
+    stream wrapper auto-enables server-side compaction for store-capable direct
+    OpenAI Responses models (`openai/*` resolved to `api.openai.com`):
 
     - Forces `store: true` (unless model compat sets `supportsStore: false`)
     - Injects `context_management: [{ type: "compaction", compact_threshold: ... }]`
@@ -306,6 +306,10 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     custom proxies, and routes with `compat.supportsStore: false`. It applies to
     the built-in OpenClaw runtime and embedded OpenAI provider hooks. The native
     Codex app-server harness continues to own its own compaction.
+
+    On direct API-key `openai-responses` routes, defaults, explicit opt-in, and
+    stored checkpoint replay follow
+    [context-engine compaction ownership](/concepts/context-engine#provider-compaction-ownership).
 
     On the native ChatGPT sign-in route, the built-in runtime instead uses
     **Codex V2 compaction** by default for context-budget pressure before a model

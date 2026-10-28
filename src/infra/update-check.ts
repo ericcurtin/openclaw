@@ -1,4 +1,3 @@
-// Computes git, dependency, and registry update status for OpenClaw installs.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { UpdateImmutableInstall } from "../../packages/gateway-protocol/src/schema/config.js";
@@ -9,6 +8,7 @@ import { createGitCommandError, executeGitCommand } from "./git-exec.js";
 import { readInstallOwner, type InstallOwner } from "./install-owner.js";
 import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
 import { readPackageName } from "./package-json.js";
+import { canAccess } from "./path-existence.js";
 import { compareValidSemver, normalizeLegacyDotBetaVersion } from "./semver.js";
 import {
   channelToNpmTag,
@@ -226,15 +226,6 @@ export function formatGitInstallLabel(update: UpdateCheckResult): string | null 
   return parts.join(" · ");
 }
 
-async function exists(p: string): Promise<boolean> {
-  try {
-    await fs.access(p);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /** Classify installation ownership without reading Git history or dependency state. */
 export async function resolveUpdateInstallKind(
   root: string | null,
@@ -298,14 +289,12 @@ async function resolveUpdateInstallOwnership(
 export async function resolveUpdateInstallIdentity(params: {
   root: string | null;
   timeoutMs?: number;
-  signal?: AbortSignal;
 }): Promise<UpdateInstallIdentity> {
   const { root, ...options } = params;
   const identity = await resolveUpdateInstallOwnership(root, options);
   const { installKind } = identity;
   const git =
     installKind === "git" && root ? await readGitUpdateIdentity(root, options) : undefined;
-  options.signal?.throwIfAborted();
   return { ...identity, git };
 }
 
@@ -532,7 +521,7 @@ async function checkDepsStatus(params: {
       ? "pnpm-lock.yaml"
       : manager === "npm"
         ? "package-lock.json"
-        : (await exists(path.join(root, "bun.lock")))
+        : (await canAccess(path.join(root, "bun.lock")))
           ? "bun.lock"
           : "bun.lockb";
   const lockfilePath = path.join(root, lockfile);
@@ -541,8 +530,8 @@ async function checkDepsStatus(params: {
     "node_modules",
     ...(manager === "pnpm" ? [".modules.yaml"] : []),
   );
-  const lockExists = await exists(lockfilePath);
-  const markerExists = await exists(markerPath);
+  const lockExists = await canAccess(lockfilePath);
+  const markerExists = await canAccess(markerPath);
   return {
     manager,
     lockfilePath,
@@ -625,13 +614,10 @@ export async function checkUpdateStatus(params: {
   useDetachedDevUpstream?: boolean;
   gitSourceHint?: GitUpdateSourceHint | null;
   includeRegistry?: boolean;
-  registryChannel?: UpdateChannel;
   resolveRegistryChannel?: (status: UpdateInstallIdentity) => UpdateChannel;
 }): Promise<UpdateCheckResult> {
   params.signal?.throwIfAborted();
   const timeoutMs = params.timeoutMs ?? UPDATE_NETWORK_TIMEOUT_MS;
-  const resolveRegistryChannel = (status: UpdateInstallIdentity) =>
-    params.registryChannel ?? params.resolveRegistryChannel?.(status);
   const fetchRegistry = async (channel: UpdateChannel | undefined): Promise<RegistryStatus> => {
     const result = await resolveNpmChannelTag({
       channel: channel ?? "stable",
@@ -647,7 +633,7 @@ export async function checkUpdateStatus(params: {
   };
   const root = params.root ? path.resolve(params.root) : null;
   if (!root) {
-    const registryChannel = resolveRegistryChannel({ installKind: "unknown" });
+    const registryChannel = params.resolveRegistryChannel?.({ installKind: "unknown" });
     const registry = params.includeRegistry ? await fetchRegistry(registryChannel) : undefined;
     params.signal?.throwIfAborted();
     return {
@@ -712,7 +698,7 @@ export async function checkUpdateStatus(params: {
     if (params.signal?.aborted) {
       return undefined;
     }
-    const registryChannel = resolveRegistryChannel({ installKind, git });
+    const registryChannel = params.resolveRegistryChannel?.({ installKind, git });
     return params.includeRegistry
       ? registryChannel === "extended-stable" && isGit
         ? {

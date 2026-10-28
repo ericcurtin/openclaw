@@ -1,5 +1,10 @@
 /** Captured destination identity and live generation facts for ordinary session events. */
-import { isAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
+
+import {
+  assertAdmittedRunOperatorAuthority,
+  type AdmittedRunOperatorAuthority,
+} from "../../agents/admitted-run-context.js";
+import { prepareAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
 import { createRuntimeToolMatcher } from "../../agents/tool-policy-match.js";
 import {
@@ -23,6 +28,7 @@ import {
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { readAgentDeletionJournalStatusInWorker } from "../../state/agent-deletion-journal.read.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { SessionEventTarget } from "./session-event-contract.js";
@@ -30,7 +36,16 @@ import { narrowSessionEventSettings } from "./session-event-policy.js";
 
 const targetScopes = resolveGlobalSingleton(
   Symbol.for("openclaw.sessionEvents.targetScopes"),
-  () => new WeakMap<SessionEventTarget, { env?: NodeJS.ProcessEnv }>(),
+  () =>
+    new WeakMap<
+      SessionEventTarget,
+      {
+        env?: NodeJS.ProcessEnv;
+        operatorAuthority?: AdmittedRunOperatorAuthority;
+        ownerContinuation?: true;
+        deletion?: { agentId: string; isBlocked: () => boolean };
+      }
+    >(),
 );
 
 export function getSessionEventRuntimeConfig() {
@@ -71,8 +86,17 @@ export async function captureSessionEventTargetForHost(
     assertCaptureCurrent?: () => void;
     /** Prepared host policy survives adapters that translate or clear the original tool cap. */
     producerPolicy?: Readonly<Pick<SessionEventTarget, "toolsAllow" | "settings">>;
+    /** Original host-issued source; the producer owns its lifetime until enqueue. */
+    operatorAuthority?: AdmittedRunOperatorAuthority;
+    /** The producing turn held command-owner authority under `operatorAuthority`. */
+    ownerContinuation?: true;
   } = {},
 ): Promise<SessionEventTarget> {
+  const operatorAuthority = options.operatorAuthority;
+  if (operatorAuthority) {
+    assertAdmittedRunOperatorAuthority(operatorAuthority);
+    operatorAuthority.assertCurrent();
+  }
   options.assertCaptureCurrent?.();
   options.assertCurrent?.();
   const agentId = normalizeAgentId(requestedAgentId);
@@ -100,6 +124,7 @@ export async function captureSessionEventTargetForHost(
       ? await prepareGatewayToolCallerAssertion()
       : undefined;
   const assertCaptureCurrent = () => {
+    operatorAuthority?.assertCurrent();
     options.assertCaptureCurrent?.();
     options.assertCurrent?.();
     if (!callerAgentMatches || !caller) {
@@ -118,6 +143,8 @@ export async function captureSessionEventTargetForHost(
     assertCaptureCurrent();
     const { withSessionEntryReadOnlyInWorker } =
       await import("../../config/sessions/session-entry-read-runtime.js");
+    await readAgentDeletionJournalStatusInWorker(agentId, { env });
+    const deletion = { agentId, isBlocked: prepareAgentDeletionBlocked(agentId, { env }) };
     const entry = await withSessionEntryReadOnlyInWorker(
       { agentId, storePath, sessionKey, env },
       assertCaptureCurrent,
@@ -168,7 +195,12 @@ export async function captureSessionEventTargetForHost(
         ? narrowSessionEventSettings(producerSettings, destinationSettings)
         : structuredClone(destinationSettings),
     };
-    targetScopes.set(target, { env });
+    targetScopes.set(target, {
+      env,
+      operatorAuthority,
+      ...(operatorAuthority && options.ownerContinuation ? { ownerContinuation: true } : {}),
+      deletion,
+    });
     return target;
   } finally {
     preparedCaller?.release();
@@ -183,7 +215,16 @@ export function assertSessionEventTargetCurrent(target: SessionEventTarget): voi
   }
   const cfg = getSessionEventRuntimeConfig();
   resolveConfiguredAgentId(cfg, target.agentId);
-  if (isAgentDeletionBlocked(target.agentId)) {
+  const scope = targetScopes.get(target);
+  let deletion = scope?.deletion;
+  if (!deletion || deletion.agentId !== target.agentId) {
+    deletion = {
+      agentId: target.agentId,
+      isBlocked: prepareAgentDeletionBlocked(target.agentId, { env: scope?.env }),
+    };
+    targetScopes.set(target, { ...scope, deletion });
+  }
+  if (deletion.isBlocked()) {
     throw new Error("Session event owner is being deleted");
   }
 }
@@ -262,6 +303,10 @@ export async function prepareSessionEventTargetForHost(
     return {
       ...retained,
       assertCurrent,
+      readSessionSettings: () => {
+        assertTargetCurrent();
+        return retained.readSessionSettings();
+      },
       bindCreation: (operation: Parameters<typeof retained.bindCreation>[0]) => {
         assertTargetCurrent();
         const assertCreationCurrent = retained.bindCreation(operation, (binding) => {
@@ -287,6 +332,17 @@ export function readSessionEventTargetEnvironment(
   return targetScopes.get(target)?.env;
 }
 
+export function readSessionEventTargetOperatorAuthority(
+  target: SessionEventTarget,
+): AdmittedRunOperatorAuthority | undefined {
+  return targetScopes.get(target)?.operatorAuthority;
+}
+
+/** Whether the producing turn was an owner under the target's captured operator source. */
+export function readSessionEventTargetOwnerContinuation(target: SessionEventTarget): boolean {
+  return targetScopes.get(target)?.ownerContinuation === true;
+}
+
 /** Coalesced work retains every producer's original destination and permission bound. */
 export function combineSessionEventTargetsForHost(
   targets: readonly SessionEventTarget[],
@@ -305,9 +361,15 @@ export function combineSessionEventTargetsForHost(
       target.sessionId !== first.sessionId ||
       target.lifecycleRevision !== first.lifecycleRevision ||
       target.chatType !== first.chatType ||
+      readSessionEventTargetOperatorAuthority(target) !==
+        readSessionEventTargetOperatorAuthority(first) ||
+      readSessionEventTargetOwnerContinuation(target) !==
+        readSessionEventTargetOwnerContinuation(first) ||
       channelRouteDedupeKey(target.deliveryContext) !== route
     ) {
-      throw new Error("Session event batch has different captured destinations");
+      throw new Error(
+        "Session event batch has different captured destinations or requester authority",
+      );
     }
   }
   const assertCurrent = () => {

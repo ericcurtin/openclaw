@@ -1,8 +1,8 @@
 import { vi } from "vitest";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
-import "./login-gate.ts";
+import "./login-gate-solid.tsx";
 
-export type LoginGateElement = HTMLElement & {
+type LoginGateElement = HTMLElement & {
   props: Record<string, unknown>;
   updateComplete: Promise<boolean>;
 };
