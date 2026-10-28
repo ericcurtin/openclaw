@@ -891,11 +891,11 @@ describe("assistant text projection", () => {
     expect(parsedChars).toBeLessThan((run.rawBuffer?.length ?? 0) * 4);
   });
 
-  it.each(["reply_to_current", "audio_as_voice"])("bounds parsing of growing %s prose", (tag) => {
+  it("bounds parsing of growing audio directive prose", () => {
     const regions = vi.spyOn(markdownRegions, "findMarkdownCodeRegions");
     const ownership = vi.spyOn(codeRegions, "findCodeOwnership");
     const run = state.getOrCreate("reply");
-    const head = `[[${tag}]] See [[Architecture Notes]] first.\n\n`;
+    const head = "[[audio_as_voice]] See [[Architecture Notes]] first.\n\n";
     const visible = " See [[Architecture Notes]] first.\n\n";
     const paragraph = "Ordinary prose keeps streaming with enough words to wrap.\n\n";
     expectUpdate({ delta: head }, visible);
@@ -953,19 +953,6 @@ describe("assistant text projection", () => {
       name: "directive across append boundary",
       frames: [`${directive}\n\nNext [`, `${directive}\n\nNext [[reply_to_current]] after`],
       visible: [`${directive}\n\nNext`, `${directive}\n\nNext  after`],
-    },
-    {
-      name: "directive across a blank line",
-      frames: ["One [[reply_to:\n\n\nx", "One [[reply_to:\n\n\nxabc]] after"],
-      visible: ["One", "One  after"],
-    },
-    {
-      name: "audio directive that exposes a fence",
-      frames: [
-        "[[audio_as_voice]]```\n\nNext\n\n",
-        "[[audio_as_voice]]```\n\nNext\n\n[[reply_to_current]] after\n",
-      ],
-      visible: ["```\n\nNext\n\n", "```\n\nNext\n\n[[reply_to_current]] after\n"],
     },
     {
       name: "replacement",

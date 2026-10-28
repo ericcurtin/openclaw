@@ -14,7 +14,7 @@ import {
   type TextProjection,
 } from "../shared/text/text-projection.js";
 import {
-  inlineDirectiveDisplayTextFilters,
+  inlineDirectiveDisplayTextFilter,
   stripInlineDirectiveTagsForDisplay,
 } from "../utils/directive-tags.js";
 import type { AssistantTextSnapshot } from "./agent-event-assistant-text.js";
@@ -116,7 +116,7 @@ export function createLiveAssistantTextProjection(options?: {
 }) {
   const managedMediaUrls = [...(options?.managedMediaUrls ?? [])];
   const projection = createTextProjection([
-    ...inlineDirectiveDisplayTextFilters,
+    inlineDirectiveDisplayTextFilter,
     {
       activationTokens: [
         INTERNAL_RUNTIME_CONTEXT_BEGIN,
