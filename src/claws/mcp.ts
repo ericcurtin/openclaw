@@ -26,7 +26,7 @@ export function digestClawMcpServer(server: Record<string, unknown>): string {
  * refs with no matching entry.
  */
 export async function installClawMcpServersStateless(
-  plan: ClawAddPlan,
+  plan: Pick<ClawAddPlan, "actions"> & { agent: Pick<ClawAddPlan["agent"], "finalId"> },
   options: ClawMutationStateOptions & {
     refs: PersistedClawMcpServerRef[];
     assertForwardCurrent?: () => void;
