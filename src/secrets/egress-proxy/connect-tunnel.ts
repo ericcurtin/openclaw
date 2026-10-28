@@ -22,7 +22,7 @@ export function startsWithTlsHandshake(socket: Duplex): Promise<boolean> {
     const settle = () => {
       socket.off("readable", settle);
       socket.off("close", settle);
-      const chunk = socket.read() as Buffer | null;
+      const chunk: Buffer | null = socket.read();
       if (chunk) {
         socket.unshift(chunk);
       }
