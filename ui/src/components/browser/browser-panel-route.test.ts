@@ -289,16 +289,18 @@ it("defers a retained panel refresh to its pending card choice", async () => {
   await panel.updateComplete;
   expect(gateway.request).toHaveBeenCalledTimes(beforePresentation);
 
+  // The wheel scrolls the page it was aimed at; nothing may follow the later card choice.
   panel.querySelector(".bp-viewport")!.dispatchEvent(wheel());
+  const beforeChoice = requests(gateway).length;
   chooseCard(panel, nodeTab);
   panel.refreshOnPresentation = true;
   await waitForTitle(panel, "work");
   observed.get(panel.querySelector(".bp-viewport")!)!(700, 500);
   await vi.advanceTimersByTimeAsync(1_000);
+  const routedRequests = requests(gateway).slice(beforeChoice);
   expect(
-    requests(gateway).some((request) => String(request.body?.fn).includes("window.scrollBy")),
+    routedRequests.some((request) => String(request.body?.fn).includes("window.scrollBy")),
   ).toBe(false);
-  const routedRequests = requests(gateway).slice(beforePresentation);
   expect(routedRequests.some((request) => request.body?.kind === "resize")).toBe(true);
   for (const request of routedRequests) {
     expect(request).toMatchObject({
@@ -413,6 +415,7 @@ it("discards an old route capture with the same target id before fetching or eva
   await waitForSolid(() =>
     expect(requests(gateway).some((request) => request.path === "/screenshot")).toBe(true),
   );
+  const beforeChoice = requests(gateway).length;
   chooseCard(panel, nodeTab);
   await waitForTitle(panel, "work");
   pending.resolve({ path: "/stale.png", targetId: "t1", url: "https://managed.example/" });
@@ -425,10 +428,11 @@ it("discards an old route capture with the same target id before fetching or eva
       return url.includes("stale");
     }),
   ).toBe(false);
+  // Geometry is requested with the screenshot; nothing may be evaluated once the route changed.
   expect(
-    requests(gateway).some(
-      (request) => request.path === "/act" && request.query?.profile === "managed",
-    ),
+    requests(gateway)
+      .slice(beforeChoice)
+      .some((request) => request.path === "/act" && request.query?.profile === "managed"),
   ).toBe(false);
 });
 

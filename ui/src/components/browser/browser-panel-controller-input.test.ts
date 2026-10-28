@@ -684,9 +684,15 @@ describe("BrowserPanel capture and input ownership", () => {
     );
     await vi.advanceTimersByTimeAsync(150);
 
-    expect(calls("/act")).toHaveLength(1);
-    expect(hitTest).toHaveBeenCalledExactlyOnceWith(32, 44);
-    expect(scroll).toHaveBeenCalledExactlyOnceWith(0, 100);
+    expect(calls("/act")).toHaveLength(2);
+    expect(hitTest.mock.calls).toEqual([
+      [30, 40],
+      [32, 44],
+    ]);
+    expect(scroll.mock.calls).toEqual([
+      [0, 60],
+      [0, 40],
+    ]);
   });
 
   it("never forwards a queued wheel action to a newly selected tab", async () => {
@@ -697,11 +703,16 @@ describe("BrowserPanel capture and input ownership", () => {
       "/act": () => ({ result: true }),
     });
 
+    // The first delta scrolls the page it was aimed at; the second waits for the next window.
     controller.input.handleWheel(new WheelEvent("wheel", { deltaY: 60, cancelable: true }));
+    controller.input.handleWheel(new WheelEvent("wheel", { deltaY: 40, cancelable: true }));
     void controller.selectTab("tab-b");
     await vi.advanceTimersByTimeAsync(150);
 
-    expect(calls("/act")).toEqual([]);
+    const scrolls = calls("/act").filter((request) =>
+      String(request.body?.fn).includes("scrollBy"),
+    );
+    expect(scrolls.map((request) => request.body?.targetId)).toEqual(["tab-a"]);
   });
 
   it("keeps the latest screenshot when same-tab captures finish out of order", async () => {
@@ -748,6 +759,50 @@ describe("BrowserPanel capture and input ownership", () => {
 
     expect(controller.view?.dataUrl).toContain(btoa("fresh screenshot"));
     expect(controller.view?.targetId).toBe("tab-a");
+  });
+
+  it("reads page geometry while the screenshot request is still pending", async () => {
+    stubScreenshotMedia();
+    const capture = createDeferred<unknown>();
+    const { controller, calls } = scenario(
+      "tab-a",
+      initialUrl,
+      {
+        "/screenshot": () => capture.promise,
+        "/act": () => metrics(initialUrl, "Initial"),
+      },
+      false,
+    );
+
+    const pending = controller.refreshView("tab-a");
+    await flushBrowserResponses();
+    expect(calls("/act")).toHaveLength(1);
+    capture.resolve({ path: "/fresh.png", targetId: "raw-a", url: initialUrl });
+    await pending;
+
+    expect(controller.view?.metrics).toMatchObject({ cssWidth: 100, url: initialUrl });
+  });
+
+  it("reports the screenshot failure once when the concurrent geometry read fails too", async () => {
+    const { controller } = scenario(
+      "tab-a",
+      initialUrl,
+      {
+        "/screenshot": () => {
+          throw new Error("Screenshot failed");
+        },
+        "/act": () => {
+          throw new Error("Evaluate failed");
+        },
+      },
+      false,
+    );
+
+    await controller.refreshView("tab-a");
+    await flushBrowserResponses();
+
+    expect(controller.errorText).toBe("Browser request failed: Screenshot failed");
+    expect(controller.loading).toBe(false);
   });
 
   it("does not combine a screenshot with another document's metrics", async () => {

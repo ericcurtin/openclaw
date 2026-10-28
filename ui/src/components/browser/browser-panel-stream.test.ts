@@ -456,12 +456,27 @@ describe("Browser panel streaming", () => {
     await advance(300, calls, 1);
     width = 800;
     controller.handleViewportResize(width, 1200);
-    await advance(300, calls, 1);
-    await advance(9400, calls, 2);
+    await advance(149, calls, 1);
+    await advance(1, calls, 2);
     expect(calls("/screencast")[1]?.[1]).toMatchObject({
       body: { maxWidth: 1600, maxHeight: 2000 },
     });
     await receive(sockets[1]!, screencastFrame(PAGE_URL, 800, 1200));
+  });
+
+  it("restarts after a continuous resize settles, not on a deadline during it", async () => {
+    const { controller, host, calls } = setup();
+    let width = 500;
+    const stage = host.renderRoot.querySelector<HTMLElement>(".bp-stage")!;
+    Object.defineProperty(stage, "clientWidth", { get: () => width });
+    controller.handleViewportResize(width, 300);
+    await start(controller);
+    for (let step = 0; step < 20; step += 1) {
+      width += 30;
+      controller.handleViewportResize(width, 300);
+      await advance(100, calls, 1);
+    }
+    await advance(150, calls, 2);
   });
 
   it.each([false, true])("settles resize before new dimensions (%s)", async (reopened) => {

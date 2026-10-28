@@ -57,27 +57,54 @@ it("keeps a slow fallback capture and delivers trailing input feedback", async (
   controller.suspendView();
 });
 
-it.each([true, false])("coalesces wheel bursts at the %s live-stream cadence", async (live) => {
-  const { client, request } = createBrowserClient(async () => ({ result: true }));
-  const controller = createBrowserPanelTestController(client, "tab-a");
-  vi.spyOn(controller.stream, "ownsView").mockReturnValue(live);
-  const delay = live ? 50 : 150;
-  const wheel = (deltaX: number, deltaY: number) =>
-    controller.input.handleWheel(new WheelEvent("wheel", { deltaX, deltaY, cancelable: true }));
-  wheel(5, 60);
-  wheel(7, 40);
-  await vi.advanceTimersByTimeAsync(delay - 1);
-  expect(request).not.toHaveBeenCalled();
-  await vi.advanceTimersByTimeAsync(1);
-  expect(request).toHaveBeenCalledOnce();
-  const action = request.mock.calls[0]?.[1];
-  expect(action).toMatchObject({
-    path: "/act",
-    body: {
-      targetId: "tab-a",
-      kind: "evaluate",
-      fn: expect.stringContaining("window.scrollBy(12, 100)"),
-    },
+it("counts a slow action response toward the fallback settle delay", async () => {
+  stubScreenshotMedia();
+  const press = createDeferred<{ ok: true }>();
+  const screenshot = vi.fn(async () => latestCapture);
+  const { client } = createBrowserClient(async (envelope) => {
+    if (envelope.path === "/screenshot") {
+      return screenshot();
+    }
+    return envelope.body?.kind === "press" ? press.promise : metrics(latestUrl, "Latest");
   });
+  const controller = createBrowserPanelTestController(client, "tab-a");
+  controller.input.handleViewportKeydown(new KeyboardEvent("keydown", { key: "a" }));
+  await vi.advanceTimersByTimeAsync(300);
+  press.resolve({ ok: true });
+  await vi.advanceTimersByTimeAsync(49);
+  expect(screenshot).not.toHaveBeenCalled();
+  // The page already settled for 300 ms while the action ran; 50 ms of the 350 ms remain.
+  await vi.advanceTimersByTimeAsync(1);
+  expect(screenshot).toHaveBeenCalledTimes(1);
   controller.suspendView();
 });
+
+it.each([true, false])(
+  "scrolls at once, then coalesces wheel bursts at the %s live-stream cadence",
+  async (live) => {
+    const { client, request } = createBrowserClient(async () => ({ result: true }));
+    const controller = createBrowserPanelTestController(client, "tab-a");
+    vi.spyOn(controller.stream, "ownsView").mockReturnValue(live);
+    const delay = live ? 50 : 150;
+    const wheel = (deltaX: number, deltaY: number) =>
+      controller.input.handleWheel(new WheelEvent("wheel", { deltaX, deltaY, cancelable: true }));
+    const scrolls = () =>
+      request.mock.calls.map((call) => (call[1] as { body: { fn: string } }).body.fn);
+    wheel(5, 60);
+    expect(scrolls()).toEqual([expect.stringContaining("window.scrollBy(5, 60)")]);
+    wheel(7, 40);
+    wheel(3, 10);
+    await vi.advanceTimersByTimeAsync(delay - 1);
+    expect(request).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(scrolls()).toEqual([
+      expect.stringContaining("window.scrollBy(5, 60)"),
+      expect.stringContaining("window.scrollBy(10, 50)"),
+    ]);
+    // An idle window ends the throttle, so the next wheel scrolls at once again.
+    await vi.advanceTimersByTimeAsync(delay);
+    wheel(0, 20);
+    expect(request).toHaveBeenCalledTimes(3);
+    controller.suspendView();
+  },
+);

@@ -50,16 +50,21 @@ export class BrowserPanelPendingInput {
     if (this.wheelTimer !== undefined) {
       return;
     }
-    this.wheelTimer = window.setTimeout(() => {
-      this.wheelTimer = undefined;
+    // Throttle, not debounce: the first delta scrolls at once, then later deltas coalesce
+    // for one interval, which also bounds the request rate while the wheel keeps turning.
+    const flushWindow = () => {
       const pendingDeltaX = this.wheelDeltaX;
       const pendingDeltaY = this.wheelDeltaY;
       this.wheelDeltaX = 0;
       this.wheelDeltaY = 0;
-      if (pendingDeltaX !== 0 || pendingDeltaY !== 0) {
-        flush(pendingDeltaX, pendingDeltaY);
+      if (pendingDeltaX === 0 && pendingDeltaY === 0) {
+        this.wheelTimer = undefined;
+        return;
       }
-    }, delayMs);
+      this.wheelTimer = window.setTimeout(flushWindow, delayMs);
+      flush(pendingDeltaX, pendingDeltaY);
+    };
+    flushWindow();
   }
 
   queueInspection(delayMs: number, current: () => boolean, inspect: () => void): void {

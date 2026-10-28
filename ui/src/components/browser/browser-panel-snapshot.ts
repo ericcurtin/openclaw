@@ -54,9 +54,10 @@ interface BrowserPanelSnapshotHost extends BrowserPanelStateWriter<
 
 /** Coordinates remote tab snapshots and their owned page images and input metrics. */
 export function createBrowserPanelSnapshot(controller: BrowserPanelSnapshotHost) {
-  function scheduleRefresh(epoch: number, current: () => boolean): void {
+  /** The page settles while the action runs; only the time left after its response remains. */
+  function scheduleRefresh(epoch: number, current: () => boolean, elapsedMs: number): void {
     controller.pendingInput.scheduleRefresh(
-      ACTION_REFRESH_DELAY_MS,
+      Math.max(0, ACTION_REFRESH_DELAY_MS - elapsedMs),
       () => {
         if (current() && controller.activeTargetId) {
           void capture(controller.activeTargetId, epoch);
@@ -157,6 +158,17 @@ export function createBrowserPanelSnapshot(controller: BrowserPanelSnapshotHost)
       captureRevision = stream.frameRevision;
       const route = controller.operations.route;
       const host = controller.host;
+      // Page geometry does not depend on the screenshot: ask for both at once. The URL check
+      // below still rejects metrics from another document.
+      const metricsRead = readBrowserPanelOwnedMetrics(
+        client,
+        targetId,
+        controller.evaluateUnavailable,
+        captureCurrent,
+        () => controller.setState("evaluateUnavailable", true),
+      );
+      // A failed screenshot supersedes this read; the await below still surfaces its error.
+      void metricsRead.catch(() => undefined);
       const shot = await captureBrowserScreenshot(client, targetId);
       if (!captureCurrent()) {
         return;
@@ -168,13 +180,7 @@ export function createBrowserPanelSnapshot(controller: BrowserPanelSnapshotHost)
           authToken: host.authToken,
           path: shot.path,
         }),
-        readBrowserPanelOwnedMetrics(
-          client,
-          targetId,
-          controller.evaluateUnavailable,
-          captureCurrent,
-          () => controller.setState("evaluateUnavailable", true),
-        ),
+        metricsRead,
       ]);
       if (!captureCurrent()) {
         return;

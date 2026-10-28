@@ -527,6 +527,33 @@ describe("Browser panel", () => {
       ]);
     });
 
+    it("sends text queued behind a slow request as one insertion without crossing keys or clicks", async () => {
+      const { request, input, actions } = await mountForm({ clickable: true });
+      const first = createDeferred<unknown>();
+      request.mockImplementationOnce(async () => first.promise);
+      const type = (text: string) => sendInput(input, "beforeinput", "insertText", text);
+      type("a");
+      type("b");
+      type("c");
+      sendInput(input, "beforeinput", "deleteContentBackward");
+      type("d");
+      type("e");
+      input.click();
+      type("f");
+      type("g");
+      expect(request).toHaveBeenCalledTimes(1);
+      first.resolve({ ok: true });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(actions()).toMatchObject([
+        { kind: "insertText", text: "a" },
+        { kind: "insertText", text: "bc" },
+        { kind: "press", key: "Backspace" },
+        { kind: "insertText", text: "de" },
+        { kind: "clickCoords" },
+        { kind: "insertText", text: "fg" },
+      ]);
+    });
+
     it.each(["failure", "route change", "new click"])(
       "paste waits for click: %s",
       async (outcome) => {
