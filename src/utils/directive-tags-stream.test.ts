@@ -26,6 +26,11 @@ function streamChunks(chunks: readonly string[]) {
   return projection;
 }
 
+function liveText(chunks: readonly string[]) {
+  const projection = createLiveAssistantTextProjection({});
+  return chunks.reduce((_text, chunk) => projection.append(chunk).text, "");
+}
+
 describe("inline directive display stream", () => {
   test.each([
     "[[reply_to_current]]\n\nHello world",
@@ -86,12 +91,7 @@ describe("inline directive display stream", () => {
       ["![", "`", "[[reply_to_current]]", "`", "](/image.png)"],
       Array.from({ length: source.length }, (_, index) => source.charAt(index)),
     ]) {
-      const projection = createLiveAssistantTextProjection({});
-      let text = "";
-      for (const chunk of chunks) {
-        text = projection.append(chunk).text;
-      }
-      expect(text).toBe(expected);
+      expect(liveText(chunks)).toBe(expected);
     }
   });
 
@@ -100,12 +100,7 @@ describe("inline directive display stream", () => {
     const source = chunks.join("");
     const expected = stripInlineDirectiveTagsForDisplay(source).text;
     expect(expected).toBe(source);
-    const projection = createLiveAssistantTextProjection({});
-    let text = "";
-    for (const chunk of chunks) {
-      text = projection.append(chunk).text;
-    }
-    expect(text).toBe(expected);
+    expect(liveText(chunks)).toBe(expected);
   });
 
   test("retains parsing when audio removal changes the image description", () => {
@@ -114,12 +109,10 @@ describe("inline directive display stream", () => {
     const expected = stripInlineDirectiveTagsForDisplay(source).text;
     expect(expected).not.toBe(source);
     for (const chunkSize of [1, 2, 4, source.length]) {
-      const projection = createLiveAssistantTextProjection({});
-      let text = "";
-      for (let index = 0; index < source.length; index += chunkSize) {
-        text = projection.append(source.slice(index, index + chunkSize)).text;
-      }
-      expect(text).toBe(expected);
+      const sized = Array.from({ length: Math.ceil(source.length / chunkSize) }, (_, index) =>
+        source.slice(index * chunkSize, (index + 1) * chunkSize),
+      );
+      expect(liveText(sized)).toBe(expected);
     }
     const projection = createTextProjection([inlineDirectiveDisplayTextFilter]);
     projection.append(chunks[0]!);
