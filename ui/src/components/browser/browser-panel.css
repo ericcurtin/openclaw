@@ -308,6 +308,21 @@ openclaw-browser-panel {
   .bp-overlay--inspect {
     cursor: default;
   }
+  /* Local acknowledgement of a press; browser-panel-input-owner animates it and it stays transparent. */
+  .bp-press {
+    position: absolute;
+    z-index: 2;
+    width: 36px;
+    height: 36px;
+    margin: 0;
+    border: 3px solid var(--accent);
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--accent) 28%, transparent);
+    /* Keeps the ring legible over both light and dark remote pages. */
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--bg) 80%, transparent);
+    opacity: 0;
+    pointer-events: none;
+  }
   .bp-tooltip {
     position: absolute;
     z-index: 3;

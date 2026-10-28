@@ -563,7 +563,7 @@ describe("Browser panel", () => {
     );
 
     it.each([false, true])(
-      "queues clicks before typing (pending text: %s)",
+      "sends clicks without waiting for each other and types after them (pending text: %s)",
       async (pendingText) => {
         const { request, input, actions } = await mountForm({ clickable: true });
         const precedingText = createDeferred<unknown>();
@@ -578,10 +578,12 @@ describe("Browser panel", () => {
         input.click();
         input.click();
         key(input, { key: "a", cancelable: true });
-        expect(request).toHaveBeenCalledTimes(1);
+        // Typed text that came first still lands before either click.
+        expect(request).toHaveBeenCalledTimes(pendingText ? 1 : 2);
         precedingText.resolve({ ok: true });
         await vi.advanceTimersByTimeAsync(0);
-        expect(request).toHaveBeenCalledTimes(pendingText ? 2 : 1);
+        // The second click does not wait for the first click's reply; typing waits for both.
+        expect(request).toHaveBeenCalledTimes(pendingText ? 3 : 2);
         firstClick.resolve({ ok: true });
         await vi.advanceTimersByTimeAsync(0);
         expect(actions()).toMatchObject([
@@ -590,6 +592,32 @@ describe("Browser panel", () => {
           { kind: "clickCoords" },
           { kind: "press", key: "a" },
         ]);
+      },
+    );
+
+    it.each([
+      { failing: "earlier", inserted: 1 },
+      { failing: "latest", inserted: 0 },
+    ])(
+      "pastes after in-flight clicks only when the latest click succeeds ($failing click fails)",
+      async ({ failing, inserted }) => {
+        const { request, input, actions } = await mountForm({ clickable: true });
+        const earlier = createDeferred<unknown>();
+        const latest = createDeferred<unknown>();
+        request.mockImplementationOnce(async () => earlier.promise);
+        request.mockImplementationOnce(async () => latest.promise);
+        input.click();
+        input.click();
+        input.dispatchEvent(paste("typed text"));
+        const settle = (click: typeof earlier, fails: boolean) =>
+          fails ? click.reject(new Error("Click failed")) : click.resolve({ ok: true });
+        // The later click answers first; text still waits for the earlier one.
+        settle(latest, failing === "latest");
+        await vi.advanceTimersByTimeAsync(0);
+        expect(actions().filter((body) => body?.kind === "insertText")).toEqual([]);
+        settle(earlier, failing === "earlier");
+        await vi.advanceTimersByTimeAsync(0);
+        expect(actions().filter((body) => body?.kind === "insertText")).toHaveLength(inserted);
       },
     );
 

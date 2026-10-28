@@ -71,10 +71,14 @@ export class BrowserPanelInputOwner {
     viewport?: HTMLElement;
     input?: HTMLTextAreaElement;
     overlay?: HTMLCanvasElement;
+    press?: HTMLElement;
   } = {};
   // An annotation stroke belongs to one pointer until that owner or the panel lifecycle ends.
   private drawingGesture: BrowserPanelDrawingGesture | null = null;
   private suppressStageClick = false;
+  // A mouse press already acknowledged by pointerdown; the click that follows must not repeat it.
+  private pressAcknowledged = false;
+  private pressAnimation: Animation | null = null;
   private inspectionError: string | null = null;
   private pendingClick: Promise<boolean> | null = null;
   private clickSequence = 0;
@@ -100,6 +104,9 @@ export class BrowserPanelInputOwner {
     this.pendingText = null;
     this.compositionCurrent = null;
     this.touchScroll = null;
+    this.pressAnimation?.cancel();
+    this.pressAnimation = null;
+    this.pressAcknowledged = false;
     const input = this.elements.input;
     if (input) {
       input.value = "";
@@ -115,6 +122,46 @@ export class BrowserPanelInputOwner {
 
   inspectHighlightRegion() {
     return browserPanelInspectHighlightRegion(this.host.view, this.host.inspected);
+  }
+
+  /**
+   * Acknowledges a press on the local stage before the remote page can answer.
+   * The marker is a purely local cue: it never implies the remote click landed.
+   */
+  private acknowledgePress(event: MouseEvent): void {
+    const marker = this.elements.press;
+    const point = browserPanelNormalizedPoint(this.elements.stage ?? null, event);
+    // The cue is optional: embedded WebViews and test DOMs may lack Web Animations.
+    if (!marker || !point || typeof marker.animate !== "function") {
+      return;
+    }
+    marker.style.left = `${point.x * 100}%`;
+    marker.style.top = `${point.y * 100}%`;
+    this.pressAnimation?.cancel();
+    const reduced = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+    const center = "translate(-50%, -50%)";
+    // The animation is the timeout: it ends on its own and leaves the marker transparent.
+    this.pressAnimation = marker.animate(
+      reduced
+        ? [{ opacity: 0.8, transform: `${center} scale(1)` }, { opacity: 0 }]
+        : [
+            { opacity: 0.9, transform: `${center} scale(0.5)` },
+            // Held near full strength while the button is down, then it expands and fades.
+            { opacity: 0.9, transform: `${center} scale(1)`, offset: 0.2 },
+            { opacity: 0, transform: `${center} scale(1.5)` },
+          ],
+      { duration: reduced ? 300 : 500, easing: "ease-out" },
+    );
+  }
+
+  handlePointerDown(event: PointerEvent): void {
+    // Touch and pen may start a scroll; they are acknowledged only once the tap becomes a click.
+    this.pressAcknowledged = false;
+    if (this.host.mode === "interact" && event.pointerType === "mouse" && event.button === 0) {
+      this.pressAcknowledged = true;
+      this.acknowledgePress(event);
+    }
+    this.handleTouchPointerDown(event);
   }
 
   handleStageClick(event: MouseEvent): void {
@@ -134,6 +181,10 @@ export class BrowserPanelInputOwner {
     if (!point || !targetId || !client) {
       return;
     }
+    if (!this.pressAcknowledged) {
+      this.acknowledgePress(event);
+    }
+    this.pressAcknowledged = false;
     const epoch = this.host.operations.epoch;
     const generation = this.inputGeneration;
     const click = () => {
@@ -150,11 +201,15 @@ export class BrowserPanelInputOwner {
       );
     };
     this.clickSequence += 1;
-    // Preserve click order and failure: a failed click can leave the previous field focused.
-    const previous = this.pendingText
-      ? Promise.all([this.pendingClick, this.pendingText])
-      : this.pendingClick;
-    this.pendingClick = previous ? previous.then(click) : click();
+    // Clicks are independent absolute-coordinate gestures, so a click never waits for the previous
+    // click's round trip (the server holds each reply for its navigation grace). Only typed text
+    // before it must land first. Text after it still waits for every click and for the latest one
+    // to succeed: a failed click can leave the previous field focused.
+    const started = this.pendingText ? this.pendingText.then(click) : click();
+    const earlier = this.pendingClick;
+    this.pendingClick = earlier
+      ? Promise.all([earlier, started]).then(([, succeeded]) => succeeded)
+      : started;
   }
 
   handleWheel(event: WheelEvent): void {
