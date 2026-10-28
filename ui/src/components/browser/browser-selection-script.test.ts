@@ -6,7 +6,7 @@ function read(limit: number, probeOnly: boolean) {
   return runInNewContext(
     `${browserSelectionScript}\nopenclawReadBrowserSelection(${limit}, ${probeOnly})`,
     { document },
-  ) as { length: number; text: string; editable: boolean; truncated: boolean };
+  ) as { length: number; text: string; truncated: boolean };
 }
 
 function selectNodeText(doc: Document, node: Node) {
@@ -31,7 +31,6 @@ function field(
   document.body.append(element);
   element.focus();
   element.setSelectionRange(start, end);
-  return element;
 }
 
 afterEach(() => {
@@ -45,26 +44,18 @@ describe("browser selection page script", () => {
     paragraph.textContent = "plain page text";
     selectNodeText(document, paragraph);
 
-    expect(read(100, false)).toEqual({
-      length: 15,
-      text: "plain page text",
-      editable: false,
-      truncated: false,
-    });
+    expect(read(100, false)).toEqual({ length: 15, text: "plain page text", truncated: false });
     expect(read(100, true)).toMatchObject({ length: 15, text: "" });
   });
 
-  it("reads the range selected inside an editable field", () => {
+  it("reads the range selected inside a field", () => {
     field("textarea", "one two three", 4, 7);
-    expect(read(100, false)).toMatchObject({ text: "two", editable: true });
-    document.body.replaceChildren();
-    field("input", "readonly value", 0, 8).readOnly = true;
-    expect(read(100, false)).toMatchObject({ text: "readonly", editable: false });
+    expect(read(100, false)).toMatchObject({ text: "two" });
   });
 
   it("never reads a password field", () => {
     field("input", "hunter2", 0, 7, "password");
-    expect(read(100, false)).toEqual({ length: 0, text: "", editable: false, truncated: false });
+    expect(read(100, false)).toEqual({ length: 0, text: "", truncated: false });
   });
 
   it("follows focus into shadow roots and same-origin frames", () => {
@@ -86,7 +77,7 @@ describe("browser selection page script", () => {
 
   it("cuts at the cap without splitting a surrogate pair", () => {
     field("textarea", "ab🦞cd", 0, 6);
-    expect(read(3, false)).toEqual({ length: 6, text: "ab", editable: true, truncated: true });
+    expect(read(3, false)).toEqual({ length: 6, text: "ab", truncated: true });
     expect(read(4, false)).toMatchObject({ text: "ab🦞", truncated: true });
   });
 });

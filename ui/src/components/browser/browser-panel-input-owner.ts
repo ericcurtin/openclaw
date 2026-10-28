@@ -367,16 +367,16 @@ export class BrowserPanelInputOwner {
     if (this.host.mode !== "interact" || !this.host.view) {
       return;
     }
-    const shortcut =
-      (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey
-        ? event.key.toLowerCase()
-        : "";
-    if ((shortcut === "c" || shortcut === "x") && !event.isComposing) {
-      // Modified keys are never forwarded, so copy and cut stay local: the page's selection is
-      // read back instead. Taking the key here also keeps WebKit, which skips the native copy
-      // event for the empty input, working.
+    const copyChord =
+      (event.ctrlKey || event.metaKey) &&
+      !event.altKey &&
+      !event.shiftKey &&
+      event.key.toLowerCase() === "c";
+    if (copyChord && !event.isComposing) {
+      // Modified keys are never forwarded, so the page's selection is read back instead. WebKit
+      // skips the native copy event for the empty input, so the key is taken here.
       event.preventDefault();
-      this.copySelection({ cut: shortcut === "x" });
+      this.copySelection();
       return;
     }
     if (
@@ -410,14 +410,14 @@ export class BrowserPanelInputOwner {
     }
   }
 
-  /** Native copy and cut events (menus, context menu); the page's selection is read asynchronously. */
+  /** Native copy events (menus, context menu); the page's selection is read asynchronously. */
   handleViewportCopy(event: ClipboardEvent): void {
     if (!this.host.view) {
       return;
     }
     event.preventDefault();
     event.stopPropagation();
-    this.copySelection({ cut: event.type === "cut" });
+    this.copySelection();
   }
 
   private selectionScope() {
@@ -480,10 +480,9 @@ export class BrowserPanelInputOwner {
 
   /**
    * Copies the page's selected text to the local clipboard. The text is only known after a round
-   * trip, so the pending read goes to the clipboard while the gesture is live. A cut also deletes
-   * a selection inside an editable field once the copy succeeded.
+   * trip, so the pending read goes to the clipboard while the gesture is live.
    */
-  copySelection(options: { cut?: boolean } = {}): void {
+  copySelection(): void {
     const toast = (key: string) => showToast({ message: t(key), severity: "error" });
     const scope = this.selectionScope();
     if (!scope) {
@@ -527,11 +526,6 @@ export class BrowserPanelInputOwner {
             ? t("browser.copyTruncated", { count: String(BROWSER_SELECTION_LIMIT) })
             : t("common.copied"),
         });
-        if (options.cut && selection?.editable) {
-          this.runAfterClick((actionClient, id) =>
-            pressBrowserKey(actionClient, { targetId: id, key: "Delete" }),
-          );
-        }
       } else if (failure !== "stale") {
         toast(COPY_FAILURE_TEXT[failure]);
       }

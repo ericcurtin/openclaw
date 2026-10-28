@@ -30,8 +30,8 @@ setupBrowserPanelTestCleanup();
 const url = "https://example.test/page";
 const writeText = vi.fn();
 
-function selected(text: string, extra: { editable?: boolean; truncated?: boolean } = {}) {
-  return { text, length: text.length, editable: false, truncated: false, ...extra };
+function selected(text: string, truncated = false) {
+  return { text, length: text.length, truncated };
 }
 
 /** A remote page whose selection reads come from `read`; probes never ask for the text. */
@@ -69,8 +69,6 @@ function createRemote(read: (probeOnly: boolean) => unknown = () => selected("")
 const toasts = () => vi.mocked(showToast).mock.calls.map(([options]) => options.message);
 const key = (options: KeyboardEventInit) =>
   new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...options });
-const copyEvent = (type: "copy" | "cut") =>
-  new Event(type, { bubbles: true, composed: true, cancelable: true }) as ClipboardEvent;
 
 beforeEach(() => {
   writeText.mockReset().mockResolvedValue(undefined);
@@ -112,6 +110,7 @@ describe("Browser panel copy", () => {
     for (const chord of [
       { key: "c", ctrlKey: true, shiftKey: true },
       { key: "c", metaKey: true, altKey: true },
+      { key: "x", ctrlKey: true },
     ]) {
       const event = key(chord);
       controller.input.handleViewportKeydown(event);
@@ -120,8 +119,8 @@ describe("Browser panel copy", () => {
     expect(remote.requests).toEqual([]);
   });
 
-  it("names a selection cut at the size cap", async () => {
-    const { controller } = setup(() => selected("abc", { truncated: true }));
+  it("names a selection truncated at the size cap", async () => {
+    const { controller } = setup(() => selected("abc", true));
     controller.input.copySelection();
 
     await vi.waitFor(() => expect(writeText).toHaveBeenCalledExactlyOnceWith("abc"));
@@ -135,7 +134,9 @@ describe("Browser panel copy", () => {
     controller.input.copySelection();
 
     await vi.waitFor(() =>
-      expect(toasts()).toEqual(["Nothing is selected. Select text in the page, then copy again."]),
+      expect(toasts()).toEqual([
+        "Nothing is selected in the page. Ask the agent to select text, then copy again.",
+      ]),
     );
     expect(writeText).not.toHaveBeenCalled();
   });
@@ -203,38 +204,16 @@ describe("Browser panel copy", () => {
     },
   );
 
-  it.each([
-    { editable: true, deletes: true },
-    { editable: false, deletes: false },
-  ])(
-    "cut deletes only an editable selection (editable: $editable)",
-    async ({ editable, deletes }) => {
-      const { remote, controller } = setup(() => selected("cut me", { editable }));
-      const event = key({ key: "x", ctrlKey: true });
-      controller.input.handleViewportKeydown(event);
-
-      await vi.waitFor(() => expect(toasts()).toEqual(["Copied!"]));
-      await vi.waitFor(() =>
-        expect(remote.acts("press")).toEqual(
-          deletes ? [expect.objectContaining({ targetId: "tab-1", key: "Delete" })] : [],
-        ),
-      );
-      expect(event.defaultPrevented).toBe(true);
-      expect(writeText).toHaveBeenCalledExactlyOnceWith("cut me");
-    },
-  );
-
-  it("keeps the remote text when a cut cannot reach the clipboard", async () => {
+  it("reports a clipboard write failure", async () => {
     writeText.mockRejectedValue(new Error("denied"));
-    const { remote, controller } = setup(() => selected("keep me", { editable: true }));
-    controller.input.copySelection({ cut: true });
+    const { controller } = setup(() => selected("keep me"));
+    controller.input.copySelection();
 
     await vi.waitFor(() =>
       expect(toasts()).toEqual([
         "Couldn’t write to your clipboard. Allow clipboard access and try again.",
       ]),
     );
-    expect(remote.acts("press")).toEqual([]);
   });
 
   it("reads the selection only after an earlier click reached the page", async () => {
@@ -268,23 +247,15 @@ describe("Browser panel copy rendering", () => {
   const copyItem = (menu: HTMLElement) =>
     menu.querySelector<HTMLElement>('[role="menuitem"][aria-label="Copy selection"]')!;
 
-  it("copies for the native copy event and cuts through the input proxy", async () => {
-    const { panel, remote } = await mountRemote(() =>
-      selected("from the page", { editable: true }),
-    );
-    const copy = copyEvent("copy");
-    panel.querySelector(".bp-viewport")!.dispatchEvent(copy);
-    await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith("from the page"));
-    expect(copy.defaultPrevented).toBe(true);
-
-    const input = panel.querySelector(".bp-input")!;
+  it("copies for the native copy event from the input proxy", async () => {
+    const { panel } = await mountRemote(() => selected("from the page"));
+    const copy = new Event("copy", { bubbles: true, composed: true, cancelable: true });
     const outer = vi.fn();
-    panel.addEventListener("cut", outer);
-    input.dispatchEvent(copyEvent("cut"));
-    await vi.waitFor(() => expect(remote.acts("press")).toHaveLength(1));
-    expect(remote.acts("press")[0]).toMatchObject({ key: "Delete" });
-    expect(writeText).toHaveBeenCalledTimes(2);
-    expect((input as HTMLTextAreaElement).value).toBe("");
+    panel.addEventListener("copy", outer);
+    panel.querySelector(".bp-input")!.dispatchEvent(copy);
+
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledExactlyOnceWith("from the page"));
+    expect(copy.defaultPrevented).toBe(true);
     expect(outer).not.toHaveBeenCalled();
   });
 
@@ -294,7 +265,9 @@ describe("Browser panel copy rendering", () => {
     let menu = await openBrowserActions(panel);
     expect(copyItem(menu).getAttribute("aria-disabled")).toBe("true");
     await waitForSolid(() =>
-      expect(copyItem(menu).getAttribute("title")).toBe("Select text in the page first."),
+      expect(copyItem(menu).getAttribute("title")).toBe(
+        "Ask the agent to select text in the page first.",
+      ),
     );
     // The probe asks for the size only, never the text.
     expect(String(remote.acts("evaluate").at(-1)?.fn)).toContain(", true);");

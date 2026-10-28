@@ -535,7 +535,6 @@ function readBrowserSelectionResult(value: unknown) {
   return {
     text: result.text,
     length,
-    editable: result.editable === true,
     truncated: result.truncated === true,
   };
 }

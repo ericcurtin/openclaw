@@ -95,6 +95,17 @@ describe("copyToClipboard", () => {
       expect(await copyToClipboard(Promise.resolve("resolved"))).toBe(true);
       expect(writeText).toHaveBeenCalledExactlyOnceWith("resolved");
     });
+
+    it("does not write resolved text over a newer copy", async () => {
+      vi.stubGlobal("navigator", { clipboard: { writeText } });
+      const pending = createDeferred<string>();
+      const older = copyToClipboard(pending.promise);
+
+      expect(await copyToClipboard("newer")).toBe(true);
+      pending.resolve("older");
+      expect(await older).toBe(false);
+      expect(writeText.mock.calls).toEqual([["newer"]]);
+    });
   });
 
   it("falls back to execCommand over plain HTTP where navigator.clipboard is undefined", async () => {

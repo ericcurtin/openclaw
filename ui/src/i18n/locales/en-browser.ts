@@ -15,10 +15,11 @@ const enBrowser = {
     copyUrl: "Copy URL",
     copySelection: "Copy selection",
     copySelectionChecking: "Checking for selected text…",
-    copySelectionEmpty: "Select text in the page first.",
+    copySelectionEmpty: "Ask the agent to select text in the page first.",
     copySelectionNoPage: "Open a page to copy its text.",
     copySelectionNative: "Select text in the Mac tab and press ⌘C.",
-    copyNothingSelected: "Nothing is selected. Select text in the page, then copy again.",
+    copyNothingSelected:
+      "Nothing is selected in the page. Ask the agent to select text, then copy again.",
     copyDisconnected: "Couldn’t copy. Reconnect to the browser and try again.",
     copyUnavailable:
       "Copying page text is disabled (browser.evaluateEnabled=false). Enable it to copy from this panel.",

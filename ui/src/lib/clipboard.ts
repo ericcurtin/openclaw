@@ -22,6 +22,9 @@ export async function copyToClipboard(
   shouldFallback?: () => boolean,
 ): Promise<boolean> {
   const attempt = beginClipboardCopy();
+  // The clipboard is shared across controls. A newer copy or a retired caller cancels a
+  // delayed transport before it can overwrite the user's selection.
+  const retired = () => attempt !== clipboardWriteAttempt || shouldFallback?.() === false;
   if (pending === "") {
     return false;
   }
@@ -47,7 +50,7 @@ export async function copyToClipboard(
     }
   }
   const text = typeof pending === "string" ? pending : await pending.catch(() => "");
-  if (!text) {
+  if (!text || (typeof pending !== "string" && retired())) {
     return false;
   }
   if (navigator.clipboard?.writeText) {
@@ -59,9 +62,7 @@ export async function copyToClipboard(
       // fall through to the execCommand path before giving up.
     }
   }
-  // The clipboard is shared across controls. A newer copy or a retired caller
-  // cancels this second transport before it can overwrite the user's selection.
-  if (attempt !== clipboardWriteAttempt || (shouldFallback && !shouldFallback())) {
+  if (retired()) {
     return false;
   }
   return copyWithExecCommand(
