@@ -100,7 +100,34 @@ openclaw-browser-panel {
     outline: 1px solid var(--muted);
     outline-offset: 1px;
   }
+  .bp-toolbar {
+    position: relative;
+  }
+  .bp-toolbar-progress {
+    position: absolute;
+    inset: auto 0 -1px;
+    z-index: 1;
+    height: 2px;
+    overflow: hidden;
+    pointer-events: none;
+  }
+  .bp-toolbar-progress::before {
+    content: "";
+    display: block;
+    width: 35%;
+    height: 100%;
+    background: var(--accent);
+    animation: bp-toolbar-progress 1.1s ease-in-out infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .bp-toolbar-progress::before {
+      width: 100%;
+      opacity: 0.5;
+      animation: none;
+    }
+  }
   .bp-toolbar .bp-toolbar-location {
+    position: relative;
     display: flex;
     flex: 1;
     min-width: 0;
@@ -113,9 +140,25 @@ openclaw-browser-panel {
     align-self: stretch;
     min-height: var(--session-rail-target);
   }
+  .bp-toolbar .bp-toolbar-hint {
+    position: absolute;
+    inset: calc(100% + 6px) 0 auto;
+    z-index: 2;
+    padding: 6px 10px;
+    border: 1px solid var(--danger);
+    border-radius: 6px;
+    background: var(--bg-elevated);
+    box-shadow: var(--shadow-md);
+    color: var(--danger);
+    font-size: 12px;
+    line-height: 16px;
+  }
   .bp-toolbar .bp-toolbar-location:focus-within {
     outline: 1px solid var(--muted);
     outline-offset: 2px;
+  }
+  .bp-toolbar .bp-toolbar-location[data-invalid="true"] {
+    outline-color: var(--danger);
   }
   .bp-toolbar .bp-toolbar-favicon {
     display: flex;
@@ -368,6 +411,15 @@ openclaw-browser-panel {
   }
   .bp-note--error {
     color: var(--danger);
+  }
+}
+
+@keyframes bp-toolbar-progress {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
   }
 }
 

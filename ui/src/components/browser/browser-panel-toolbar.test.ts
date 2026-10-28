@@ -218,6 +218,59 @@ describe("Browser toolbar", () => {
     expect(panel.querySelector(".bp-toolbar-favicon svg")).not.toBeNull();
   });
 
+  it("keeps a search phrase in the address field and says what to enter instead", async () => {
+    const pageUrl = "https://assets.test/a.png";
+    const navigation = createDeferred<unknown>();
+    const { client, request } = createBrowserClient(async ({ path }) => {
+      switch (path) {
+        case "/navigate":
+          return await navigation.promise;
+        case "/tabs":
+          return { running: true, tabs: [createBrowserPanelTestTab("asset", pageUrl, "Page")] };
+        case "/screenshot":
+          return { path: "/fresh.png", targetId: "raw-asset", url: pageUrl };
+        case "/act":
+          return createBrowserPanelTestMetrics(pageUrl, "Page");
+        default:
+          return { ok: true };
+      }
+    });
+    stubScreenshotMedia();
+    const panel = panelFor(client);
+    mountSolid(() => panel);
+    await waitForSolid(() => expect(panel.querySelector(".bp-shot")).not.toBeNull());
+    const navigations = () =>
+      request.mock.calls.filter(([, params]) => (params as { path?: string }).path === "/navigate");
+    const input = panel.querySelector<HTMLInputElement>(".bp-url")!;
+    const hint = () => panel.querySelector(".bp-toolbar-hint");
+    const enter = (text: string) => {
+      input.focus();
+      input.value = text;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    };
+
+    enter("cats funny");
+    await waitForSolid(() => expect(hint()?.getAttribute("role")).toBe("alert"));
+    expect(input.getAttribute("aria-describedby")).toBe(hint()!.id);
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(document.activeElement).toBe(input);
+    expect(input.value).toBe("cats funny");
+    expect(navigations()).toHaveLength(0);
+
+    enter("localhost:3000");
+    await waitForSolid(() => expect(navigations()).toHaveLength(1));
+    expect(navigations()[0]?.[1]).toMatchObject({ body: { url: "http://localhost:3000/" } });
+    await waitForSolid(() => expect(input.value).toBe("http://localhost:3000/"));
+    expect(hint()).toBeNull();
+    expect(document.activeElement).not.toBe(input);
+
+    // The page keeps loading until the navigation settles; the toolbar must say so.
+    await waitForSolid(() => expect(panel.querySelector(".bp-toolbar-progress")).not.toBeNull());
+    navigation.resolve({ ok: true });
+    await waitForSolid(() => expect(panel.querySelector(".bp-toolbar-progress")).toBeNull());
+  });
+
   it("renders the download's Gateway error and HTTP status", async () => {
     const panel = await mountToolbar();
     const error = { error: { message: "Unauthorized", type: "unauthorized" } };

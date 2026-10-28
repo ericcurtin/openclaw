@@ -45,6 +45,7 @@ const enBrowser = {
     errors: {
       pasteFailed: "Could not paste. Reconnect to a managed browser and try again.",
       requestFailed: "Browser request failed: {error}",
+      invalidUrl: "That isn't a web address. Enter an http or https URL, such as example.com.",
       downloadFailed:
         "Could not download this file: {error}. Try again, or open it in your browser to save it.",
       downloadEmpty: "No file returned.",

@@ -81,6 +81,18 @@ describe("Browser panel", () => {
     );
   });
 
+  it.each(["localhost:3000", "127.0.0.1:8080/app", "[::1]:5173", "app.localhost"])(
+    "defaults local host %s to http",
+    (draft) => {
+      expect(normalizeBrowserUrlDraft(draft)).toBe(new URL(`http://${draft}`).toString());
+    },
+  );
+
+  it("keeps an explicit scheme and whitespace inside an explicit URL", () => {
+    expect(normalizeBrowserUrlDraft("https://localhost:3000")).toBe("https://localhost:3000/");
+    expect(normalizeBrowserUrlDraft("http://example.com/a b")).toBe("http://example.com/a%20b");
+  });
+
   it("rejects empty and non-http(s) inputs", () => {
     expect(normalizeBrowserUrlDraft("   ")).toBeNull();
     expect(normalizeBrowserUrlDraft("javascript:alert(1)")).toBeNull();

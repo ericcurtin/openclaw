@@ -599,12 +599,19 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
       void panel.runAction((client) => goBrowserHistory(client, { targetId, delta }));
     },
 
-    commitUrlDraft(): void {
+    /** Returns false when the draft is not a navigable address, so the caller can say so. */
+    commitUrlDraft(): boolean {
+      if (!panel.urlDraft.trim()) {
+        return true;
+      }
       const url = normalizeBrowserUrlDraft(panel.urlDraft);
       if (!url) {
-        return;
+        return false;
       }
+      // Show the address actually opened, including an inferred scheme.
+      panel.setState("urlDraft", url);
       void panel.openUrl(url, { newTab: panel.pendingNewTab || panel.tabs.length === 0 });
+      return true;
     },
 
     beginNewTab(): void {
