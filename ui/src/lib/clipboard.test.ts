@@ -68,8 +68,8 @@ describe("copyToClipboard", () => {
       expect(write).toHaveBeenCalledOnce();
       pending.resolve("later");
       expect(await copy).toBe(true);
-      const [[[item]]] = write.mock.calls;
-      expect(await (await item!.items["text/plain"]).text()).toBe("later");
+      const blob = await write.mock.calls[0]?.[0][0]?.items["text/plain"];
+      expect(await blob?.text()).toBe("later");
       expect(writeText).not.toHaveBeenCalled();
     });
 

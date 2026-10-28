@@ -1,10 +1,13 @@
+import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it } from "vitest";
 import { browserSelectionScript } from "./browser-selection-script.ts";
 
-const read = new Function(`${browserSelectionScript}\nreturn openclawReadBrowserSelection;`)() as (
-  limit: number,
-  probeOnly: boolean,
-) => { length: number; text: string; editable: boolean; truncated: boolean };
+function read(limit: number, probeOnly: boolean) {
+  return runInNewContext(
+    `${browserSelectionScript}\nopenclawReadBrowserSelection(${limit}, ${probeOnly})`,
+    { document },
+  ) as { length: number; text: string; editable: boolean; truncated: boolean };
+}
 
 function selectNodeText(doc: Document, node: Node) {
   const range = doc.createRange();
