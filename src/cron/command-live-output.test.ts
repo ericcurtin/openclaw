@@ -129,6 +129,22 @@ describe("cron command live output buffer", () => {
     expect(tail.text).toContain("ok");
   });
 
+  it("keeps masking a key whose opener left the ring, even one the trim split", () => {
+    const live = begin(64);
+    live.append(bytes(`-----BEGIN PRIVATE KEY-----\n${"keyZ9Z9\n".repeat(8)}`));
+    const first = readCronCommandLiveOutput("job");
+    expect(first.truncated).toBe(true);
+    expect(first.text).not.toContain("Z9Z9");
+    live.append(bytes("lastZ9Z9\n-----END PRIVATE KEY-----\nafter\n"));
+    const second = readCronCommandLiveOutput("job", { cursor: first.cursor, runAtMs: 1000 });
+    expect(second.text).not.toContain("Z9Z9");
+    expect(second.text).toContain("after");
+
+    const split = begin(40);
+    split.append(bytes("-----BEGIN PRIVATE KEY-----\nk1Z9Z9\nk2Z9Z9\n"));
+    expect(readCronCommandLiveOutput("job").text).not.toContain("Z9Z9");
+  });
+
   it("holds no more than the cap however many large chunks pass through", () => {
     const live = begin();
     const chunk = Buffer.alloc(64 * 1024, "x\n");

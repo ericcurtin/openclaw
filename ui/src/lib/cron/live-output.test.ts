@@ -3,6 +3,7 @@ import { applyLiveOutput } from "./live-output.ts";
 
 // Mirrors the panel's documented line bound.
 const LIVE_OUTPUT_MAX_LINES = 2000;
+const LIVE_OUTPUT_MAX_CHARS = 256 * 1024;
 
 const empty = { text: "", truncated: false };
 
@@ -36,4 +37,20 @@ it("handles leading blank lines without miscounting", () => {
     text: "\n\n\n",
     truncated: false,
   });
+});
+
+it("bounds output that has no newlines", () => {
+  const chunk = "x".repeat(64 * 1024);
+  let view = applyLiveOutput(empty, { text: chunk, reset: true });
+  for (let i = 0; i < 6; i += 1) {
+    view = applyLiveOutput(view, { text: chunk });
+  }
+  expect(view.text).toHaveLength(LIVE_OUTPUT_MAX_CHARS);
+  expect(view.truncated).toBe(true);
+  // A cut that would land inside an emoji drops its orphaned half.
+  const emoji = applyLiveOutput(empty, {
+    text: `\u{1f600}${"x".repeat(LIVE_OUTPUT_MAX_CHARS - 1)}`,
+    reset: true,
+  });
+  expect(emoji.text.charCodeAt(0)).toBeLessThan(0xdc00);
 });

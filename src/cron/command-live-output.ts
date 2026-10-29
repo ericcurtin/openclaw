@@ -5,11 +5,12 @@
  * `finally`, so every end path (exit, timeout, abort, spawn error) discards the buffer. The
  * recorded run result stays the source of truth afterwards. Appending only copies bytes into a
  * fixed-size ring, so memory never exceeds the cap whatever the chunk sizes; sanitizing and
- * redaction run when a client reads, so unwatched jobs pay nothing.
+ * redaction run when a client reads, so unwatched jobs pay nothing. Only the bytes leaving the ring
+ * are scanned, to remember whether a private key block is open at its first retained byte.
  */
 import { stripAnsiSequences } from "../../packages/terminal-core/src/ansi.js";
 import { replaceRedactPattern } from "../logging/redact-pattern-runtime.js";
-import { PEM_REDACT_MATCHER, startsInsidePemBlock } from "../logging/redact-pem.js";
+import { createPemBlockTracker, type PemBlockTracker } from "../logging/redact-pem.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
@@ -23,6 +24,8 @@ type LiveOutputEntry = {
   ring: Buffer;
   /** Absolute byte offset after everything ever appended; cursors survive trimming. */
   end: number;
+  /** Private key state at the first retained byte, fed by the bytes that left the ring. */
+  head: PemBlockTracker;
 };
 
 export type CronCommandLiveOutputRead = {
@@ -52,11 +55,17 @@ export function beginCronCommandLiveOutput(params: {
     1,
     Math.min(params.outputMaxBytes ?? COMMAND_LIVE_OUTPUT_MAX_BYTES, COMMAND_LIVE_OUTPUT_MAX_BYTES),
   );
-  const entry: LiveOutputEntry = { runAtMs: params.runAtMs, ring: Buffer.alloc(maxBytes), end: 0 };
+  const entry: LiveOutputEntry = {
+    runAtMs: params.runAtMs,
+    ring: Buffer.alloc(maxBytes),
+    end: 0,
+    head: createPemBlockTracker(),
+  };
   entries().set(params.jobId, entry);
   return {
     append(chunk: Buffer) {
       const { ring } = entry;
+      trackEvicted(entry, chunk);
       // Only the last `ring.length` bytes can survive; they start at this absolute offset.
       const kept = chunk.subarray(Math.max(0, chunk.length - ring.length));
       const at = (entry.end + chunk.length - kept.length) % ring.length;
@@ -74,13 +83,28 @@ export function beginCronCommandLiveOutput(params: {
   };
 }
 
-/** Copies the retained bytes from absolute offset `from` to the end. */
-function sliceFrom(entry: LiveOutputEntry, from: number): Buffer {
+/** Copies `length` retained bytes starting at absolute offset `from`. */
+function sliceFrom(entry: LiveOutputEntry, from: number, length: number): Buffer {
   const { ring } = entry;
-  const length = entry.end - from;
   const at = from % ring.length;
   const head = Math.min(length, ring.length - at);
   return Buffer.concat([ring.subarray(at, at + head), ring.subarray(0, length - head)]);
+}
+
+/** Feeds the bytes this chunk pushes out of the ring to the private key tracker, in order. */
+function trackEvicted(entry: LiveOutputEntry, chunk: Buffer): void {
+  const { ring, head } = entry;
+  const oldStart = Math.max(0, entry.end - ring.length);
+  const newStart = Math.max(0, entry.end + chunk.length - ring.length);
+  const fromRing = Math.min(newStart, entry.end) - oldStart;
+  if (fromRing > 0) {
+    // Latin-1 strings keep one character per byte and never copy through a Buffer.
+    const at = oldStart % ring.length;
+    const first = Math.min(fromRing, ring.length - at);
+    head.feed(ring.toString("latin1", at, at + first));
+    head.feed(ring.toString("latin1", 0, fromRing - first));
+  }
+  head.feed(chunk.toString("latin1", 0, newStart - Math.min(newStart, entry.end)));
 }
 
 /** Index after the last line terminator; a trailing `\r` may still be half of `\r\n`. */
@@ -108,21 +132,15 @@ function endOfCompleteUtf8(data: Buffer): number {
 
 /**
  * Strips terminal escapes and controls, then redacts with the tool-payload policy used for other
- * cron diagnostics. A private key spans many lines and reads, so `earlier` (retained output before
- * this read) tells the PEM matcher whether a block is already open. When the tail was trimmed,
- * an END with no opener means the key started before it: mask up to that END. Accepted edge: a
- * trimmed tail holding only mid-key lines and no delimiter is not recognized.
+ * cron diagnostics. A private key spans many lines and reads, so `keys` (tracking everything
+ * before `raw`) lets the PEM matcher mask a block whose opener was read earlier or has left the
+ * ring.
  */
-function presentLiveOutput(raw: string, earlier: string, trimmed: boolean): string {
+function presentLiveOutput(raw: string, keys: PemBlockTracker): string {
   const text = stripAnsiSequences(raw)
     .replace(/\r\n?/g, "\n")
     .replace(/\p{Cc}/gu, (control) => (control === "\n" || control === "\t" ? control : ""));
-  const pem = PEM_REDACT_MATCHER.createContext();
-  const history = pem.prepend();
-  history.consume(earlier);
-  history.finish();
-  pem.resolve(trimmed && startsInsidePemBlock(earlier + raw));
-  const masked = replaceRedactPattern(text, pem.pattern, (match) => match.replacement ?? "");
+  const masked = replaceRedactPattern(text, keys.pattern, (match) => match.replacement ?? "");
   // Masking a dangling block swallows the final newline; keep lines separate for the next read.
   return redactToolPayloadText(
     text.endsWith("\n") && !masked.endsWith("\n") ? `${masked}\n` : masked,
@@ -156,7 +174,7 @@ export function readCronCommandLiveOutput(
   if (from === entry.end) {
     return { ...base, cursor: from, text: "" };
   }
-  const retained = sliceFrom(entry, start);
+  const retained = sliceFrom(entry, start, entry.end - start);
   const before = from - start;
   let data = retained.subarray(before);
   let skipped = 0;
@@ -167,6 +185,8 @@ export function readCronCommandLiveOutput(
     }
     data = data.subarray(skipped);
   }
+  const keys = entry.head.clone();
+  keys.feed(retained.subarray(0, before).toString("latin1"));
   let cut = endOfLastLine(data);
   if (cut === 0 && data.length > MAX_PENDING_LINE_BYTES) {
     cut = endOfCompleteUtf8(data);
@@ -174,10 +194,6 @@ export function readCronCommandLiveOutput(
   return {
     ...base,
     cursor: from + skipped + cut,
-    text: presentLiveOutput(
-      data.subarray(0, cut).toString("utf8"),
-      retained.subarray(0, before).toString("utf8"),
-      start > 0,
-    ),
+    text: presentLiveOutput(data.subarray(0, cut).toString("utf8"), keys),
   };
 }
