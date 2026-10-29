@@ -129,7 +129,7 @@ class BrowserScreencastClient {
 }
 
 const RETRY_DELAY_MS = 10_000;
-const RESIZE_RESTART_DEBOUNCE_MS = 150;
+const RESIZE_RESTART_DEBOUNCE_MS = 500;
 
 interface BrowserPanelStreamHost extends BrowserPanelStateWriter<
   "activeTargetId" | "view" | "tabs" | "loading"
@@ -478,9 +478,8 @@ export class BrowserPanelStream {
     if (!attempt || !this.current(attempt) || !this.resized(attempt)) {
       return;
     }
-    // Restart once the layout stops changing.
-    clearTimeout(this.resizeTimer);
-    this.resizeTimer = setTimeout(() => {
+    // Coalesce a burst of layout changes into one restart.
+    this.resizeTimer ??= setTimeout(() => {
       this.resizeTimer = undefined;
       if (this.attempt !== attempt || !this.current(attempt) || !this.resized(attempt)) {
         return;

@@ -52,10 +52,9 @@ function setup<T>(mount: (controller: BrowserPanel) => T) {
   });
   const clicks = () => actions("clickCoords");
   const scrolls = () =>
-    actions("evaluate").flatMap((body) => {
-      const scroll = /window\.scrollBy\((-?\d+), (-?\d+)\)/.exec(String(body?.fn));
-      return scroll ? [scroll.slice(1)] : [];
-    });
+    actions("evaluate").map((body) =>
+      /window\.scrollBy\((-?\d+), (-?\d+)\)/.exec(String(body?.fn))?.slice(1),
+    );
   return { controller, clicks, scrolls, input: mount(controller) };
 }
 
@@ -94,12 +93,10 @@ it("drops a pending pen scroll when capture state resets", async () => {
   const { controller, input, scrolls } = setup(renderInput);
   input.dispatchEvent(pointer("pointerdown", 1, 50, 70, "pen"));
   input.dispatchEvent(pointer("pointermove", 1, 50, 40, "pen"));
-  input.dispatchEvent(pointer("pointermove", 1, 50, 30, "pen"));
   controller.input.resetCaptureState();
   input.dispatchEvent(pointer("pointermove", 1, 50, 10, "pen"));
   await settle();
-  // Only the delta sent before the reset scrolls.
-  expect(scrolls()).toEqual([["0", "30"]]);
+  expect(scrolls()).toEqual([]);
 });
 
 it("suppresses the click that follows an inspect pointerdown", async () => {

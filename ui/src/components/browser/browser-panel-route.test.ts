@@ -289,18 +289,16 @@ it("defers a retained panel refresh to its pending card choice", async () => {
   await panel.updateComplete;
   expect(gateway.request).toHaveBeenCalledTimes(beforePresentation);
 
-  // The first wheel scrolls at once; nothing follows the card choice.
   panel.querySelector(".bp-viewport")!.dispatchEvent(wheel());
-  const beforeChoice = requests(gateway).length;
   chooseCard(panel, nodeTab);
   panel.refreshOnPresentation = true;
   await waitForTitle(panel, "work");
   observed.get(panel.querySelector(".bp-viewport")!)!(700, 500);
   await vi.advanceTimersByTimeAsync(1_000);
-  const routedRequests = requests(gateway).slice(beforeChoice);
   expect(
-    routedRequests.some((request) => String(request.body?.fn).includes("window.scrollBy")),
+    requests(gateway).some((request) => String(request.body?.fn).includes("window.scrollBy")),
   ).toBe(false);
+  const routedRequests = requests(gateway).slice(beforePresentation);
   expect(routedRequests.some((request) => request.body?.kind === "resize")).toBe(true);
   for (const request of routedRequests) {
     expect(request).toMatchObject({

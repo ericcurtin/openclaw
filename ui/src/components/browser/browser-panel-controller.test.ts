@@ -400,9 +400,7 @@ describe("BrowserPanel tab and lifecycle ownership", () => {
         controller.setMode("inspect");
         controller.handleOverlayPointerMove(createPointer(10, 20));
       } else {
-        // The first delta scrolls at once; the second is queued behind it.
         controller.input.handleWheel(new WheelEvent("wheel", { deltaY: 60, cancelable: true }));
-        controller.input.handleWheel(new WheelEvent("wheel", { deltaY: 40, cancelable: true }));
       }
       void controller.openUrl("https://example.test/destination", { newTab: false });
       inspection.resolve({ result: createInspectedNode("previous-document") });
@@ -412,7 +410,7 @@ describe("BrowserPanel tab and lifecycle ownership", () => {
       if (kind === "inspection") {
         expect(controller.inspected).toBeNull();
       } else {
-        expect(calls("/act")).toHaveLength(1);
+        expect(calls("/act")).toHaveLength(0);
       }
     },
   );

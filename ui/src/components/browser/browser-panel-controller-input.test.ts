@@ -550,7 +550,7 @@ describe("BrowserPanel capture and input ownership", () => {
     const latestInspection = createDeferred<unknown>();
     let inspectionCount = 0;
     const elementFromPoint = vi.fn(() => null);
-    const { controller, request } = scenario("tab-a", undefined, {
+    const { controller } = scenario("tab-a", undefined, {
       "/act": async (envelope) => {
         if (envelope.body?.kind !== "evaluate") {
           throw new Error("Unexpected browser inspection");
@@ -574,17 +574,6 @@ describe("BrowserPanel capture and input ownership", () => {
     await vi.advanceTimersByTimeAsync(120);
 
     expect(inspectionCount).toBe(2);
-    expect(request).toHaveBeenLastCalledWith(
-      "browser.request",
-      expect.objectContaining({
-        method: "POST",
-        path: "/act",
-        body: expect.objectContaining({
-          kind: "evaluate",
-          targetId: "tab-a",
-        }),
-      }),
-    );
     expect(elementFromPoint).toHaveBeenLastCalledWith(70, 80);
     const latestNode = createInspectedNode("latest-coalesced");
     latestInspection.resolve({ result: latestNode });
@@ -684,15 +673,9 @@ describe("BrowserPanel capture and input ownership", () => {
     );
     await vi.advanceTimersByTimeAsync(150);
 
-    expect(calls("/act")).toHaveLength(2);
-    expect(hitTest.mock.calls).toEqual([
-      [30, 40],
-      [32, 44],
-    ]);
-    expect(scroll.mock.calls).toEqual([
-      [0, 60],
-      [0, 40],
-    ]);
+    expect(calls("/act")).toHaveLength(1);
+    expect(hitTest).toHaveBeenCalledExactlyOnceWith(32, 44);
+    expect(scroll).toHaveBeenCalledExactlyOnceWith(0, 100);
   });
 
   it("never forwards a queued wheel action to a newly selected tab", async () => {
@@ -703,16 +686,11 @@ describe("BrowserPanel capture and input ownership", () => {
       "/act": () => ({ result: true }),
     });
 
-    // The first delta scrolls at once.
     controller.input.handleWheel(new WheelEvent("wheel", { deltaY: 60, cancelable: true }));
-    controller.input.handleWheel(new WheelEvent("wheel", { deltaY: 40, cancelable: true }));
     void controller.selectTab("tab-b");
     await vi.advanceTimersByTimeAsync(150);
 
-    const scrolls = calls("/act").filter((request) =>
-      String(request.body?.fn).includes("scrollBy"),
-    );
-    expect(scrolls.map((request) => request.body?.targetId)).toEqual(["tab-a"]);
+    expect(calls("/act")).toEqual([]);
   });
 
   it("keeps the latest screenshot when same-tab captures finish out of order", async () => {
