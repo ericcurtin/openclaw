@@ -138,17 +138,17 @@ export class BrowserPanelInputOwner {
     marker.style.left = `${point.x * 100}%`;
     marker.style.top = `${point.y * 100}%`;
     this.pressAnimation?.cancel();
-    const reduced = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
-    const center = "translate(-50%, -50%)";
+    const reduced = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     // The animation is the timeout: it ends on its own and leaves the marker transparent.
+    // The stylesheet owns centering, so reduced motion animates opacity only.
     this.pressAnimation = marker.animate(
       reduced
-        ? [{ opacity: 0.8, transform: `${center} scale(1)` }, { opacity: 0 }]
+        ? [{ opacity: 0.8 }, { opacity: 0 }]
         : [
-            { opacity: 0.9, transform: `${center} scale(0.5)` },
+            { opacity: 0.9, transform: "scale(0.5)" },
             // Held near full strength while the button is down, then it expands and fades.
-            { opacity: 0.9, transform: `${center} scale(1)`, offset: 0.2 },
-            { opacity: 0, transform: `${center} scale(1.5)` },
+            { opacity: 0.9, transform: "scale(1)", offset: 0.2 },
+            { opacity: 0, transform: "scale(1.5)" },
           ],
       { duration: reduced ? 300 : 500, easing: "ease-out" },
     );
@@ -201,15 +201,11 @@ export class BrowserPanelInputOwner {
       );
     };
     this.clickSequence += 1;
-    // Clicks are independent absolute-coordinate gestures, so a click never waits for the previous
-    // click's round trip (the server holds each reply for its navigation grace). Only typed text
-    // before it must land first. Text after it still waits for every click and for the latest one
-    // to succeed: a failed click can leave the previous field focused.
-    const started = this.pendingText ? this.pendingText.then(click) : click();
-    const earlier = this.pendingClick;
-    this.pendingClick = earlier
-      ? Promise.all([earlier, started]).then(([, succeeded]) => succeeded)
-      : started;
+    // Preserve click order and failure: a failed click can leave the previous field focused.
+    const previous = this.pendingText
+      ? Promise.all([this.pendingClick, this.pendingText])
+      : this.pendingClick;
+    this.pendingClick = previous ? previous.then(click) : click();
   }
 
   handleWheel(event: WheelEvent): void {

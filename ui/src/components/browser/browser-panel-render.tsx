@@ -260,11 +260,12 @@ function ViewportContent(
               onLostPointerCapture={(event) => props.controller.input.handleTouchPointerEnd(event)}
             />
           ) : null}
-          <span
-            ref={(element) => (props.controller.input.elements.press = element)}
-            class="bp-press"
-            aria-hidden="true"
-          />
+          <span class="bp-press-clip" aria-hidden="true">
+            <span
+              ref={(element) => (props.controller.input.elements.press = element)}
+              class="bp-press"
+            />
+          </span>
           <InspectTooltip controller={props.controller} />
         </div>
       </Match>
