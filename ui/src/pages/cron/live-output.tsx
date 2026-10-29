@@ -93,16 +93,12 @@ export function LiveOutput(props: { gateway: CronProps["gateway"]; jobId: string
         <div class="settings-row__title">{t("cron.liveOutput.title")}</div>
         <div class="settings-row__desc">{t("cron.liveOutput.hint")}</div>
       </div>
-      {view().truncated ? (
-        <div class="muted cron-live-output__note">{t("cron.liveOutput.truncated")}</div>
-      ) : undefined}
-      {error() ? <div class="muted cron-live-output__note">{error()}</div> : undefined}
-      {ended() ? (
-        <div class="muted cron-live-output__note">{t("cron.liveOutput.ended")}</div>
-      ) : undefined}
+      {view().truncated ? <div class="muted">{t("cron.liveOutput.truncated")}</div> : undefined}
+      {error() ? <div class="muted">{error()}</div> : undefined}
+      {ended() ? <div class="muted">{t("cron.liveOutput.ended")}</div> : undefined}
       <div class="cron-live-output__frame">
         <pre
-          class="cron-live-output__stream"
+          class="code-block cron-live-output__stream"
           role="log"
           aria-live="off"
           tabindex="0"
