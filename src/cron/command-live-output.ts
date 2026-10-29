@@ -4,9 +4,12 @@
  * `runCronCommandJob` is the only writer: it opens an entry before spawning and closes it in its
  * `finally`, so every end path (exit, timeout, abort, spawn error) discards the buffer. The
  * recorded run result stays the source of truth afterwards. Appending only copies bytes into a
- * bounded ring; sanitizing and redaction run when a client reads, so unwatched jobs pay nothing.
+ * fixed-size ring, so memory never exceeds the cap whatever the chunk sizes; sanitizing and
+ * redaction run when a client reads, so unwatched jobs pay nothing.
  */
 import { stripAnsiSequences } from "../../packages/terminal-core/src/ansi.js";
+import { replaceRedactPattern } from "../logging/redact-pattern-runtime.js";
+import { PEM_REDACT_MATCHER, startsInsidePemBlock } from "../logging/redact-pem.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
@@ -16,10 +19,8 @@ const MAX_PENDING_LINE_BYTES = 4096;
 
 type LiveOutputEntry = {
   runAtMs: number;
-  maxBytes: number;
-  chunks: Buffer[];
-  head: number;
-  retained: number;
+  /** Absolute byte offset `n` lives at `ring[n % ring.length]`. */
+  ring: Buffer;
   /** Absolute byte offset after everything ever appended; cursors survive trimming. */
   end: number;
 };
@@ -51,43 +52,18 @@ export function beginCronCommandLiveOutput(params: {
     1,
     Math.min(params.outputMaxBytes ?? COMMAND_LIVE_OUTPUT_MAX_BYTES, COMMAND_LIVE_OUTPUT_MAX_BYTES),
   );
-  const entry: LiveOutputEntry = {
-    runAtMs: params.runAtMs,
-    maxBytes,
-    chunks: [],
-    head: 0,
-    retained: 0,
-    end: 0,
-  };
+  const entry: LiveOutputEntry = { runAtMs: params.runAtMs, ring: Buffer.alloc(maxBytes), end: 0 };
   entries().set(params.jobId, entry);
   return {
     append(chunk: Buffer) {
-      if (chunk.length === 0) {
-        return;
-      }
+      const { ring } = entry;
+      // Only the last `ring.length` bytes can survive; they start at this absolute offset.
+      const kept = chunk.subarray(Math.max(0, chunk.length - ring.length));
+      const at = (entry.end + chunk.length - kept.length) % ring.length;
+      const head = Math.min(kept.length, ring.length - at);
+      kept.copy(ring, at, 0, head);
+      kept.copy(ring, 0, head);
       entry.end += chunk.length;
-      const kept = chunk.length > maxBytes ? chunk.subarray(chunk.length - maxBytes) : chunk;
-      // The runner's own capture may keep a reference to the chunk; copy what we retain.
-      entry.chunks.push(Buffer.from(kept));
-      entry.retained += kept.length;
-      while (entry.retained > maxBytes) {
-        const first = entry.chunks[entry.head];
-        if (!first) {
-          break;
-        }
-        const excess = entry.retained - maxBytes;
-        if (first.length <= excess) {
-          entry.head += 1;
-          entry.retained -= first.length;
-        } else {
-          entry.chunks[entry.head] = first.subarray(excess);
-          entry.retained -= excess;
-        }
-      }
-      if (entry.head > 1024 && entry.head * 2 > entry.chunks.length) {
-        entry.chunks = entry.chunks.slice(entry.head);
-        entry.head = 0;
-      }
     },
     end() {
       const registry = entries();
@@ -98,19 +74,13 @@ export function beginCronCommandLiveOutput(params: {
   };
 }
 
+/** Copies the retained bytes from absolute offset `from` to the end. */
 function sliceFrom(entry: LiveOutputEntry, from: number): Buffer {
-  const wanted = entry.end - from;
-  const parts: Buffer[] = [];
-  let have = 0;
-  for (let i = entry.chunks.length - 1; i >= entry.head && have < wanted; i -= 1) {
-    const chunk = entry.chunks[i];
-    if (chunk) {
-      parts.push(chunk);
-      have += chunk.length;
-    }
-  }
-  const joined = Buffer.concat(parts.toReversed());
-  return joined.subarray(joined.length - wanted);
+  const { ring } = entry;
+  const length = entry.end - from;
+  const at = from % ring.length;
+  const head = Math.min(length, ring.length - at);
+  return Buffer.concat([ring.subarray(at, at + head), ring.subarray(0, length - head)]);
 }
 
 /** Index after the last line terminator; a trailing `\r` may still be half of `\r\n`. */
@@ -138,14 +108,25 @@ function endOfCompleteUtf8(data: Buffer): number {
 
 /**
  * Strips terminal escapes and controls, then redacts with the tool-payload policy used for other
- * cron diagnostics. Accepted edge: each read redacts its own slice, so a multi-line secret (a PEM
- * block) split across two reads is not recognized as one block.
+ * cron diagnostics. A private key spans many lines and reads, so `earlier` (retained output before
+ * this read) tells the PEM matcher whether a block is already open. When the tail was trimmed,
+ * an END with no opener means the key started before it: mask up to that END. Accepted edge: a
+ * trimmed tail holding only mid-key lines and no delimiter is not recognized.
  */
-function presentLiveOutput(raw: string): string {
+function presentLiveOutput(raw: string, earlier: string, trimmed: boolean): string {
   const text = stripAnsiSequences(raw)
     .replace(/\r\n?/g, "\n")
     .replace(/\p{Cc}/gu, (control) => (control === "\n" || control === "\t" ? control : ""));
-  return redactToolPayloadText(text);
+  const pem = PEM_REDACT_MATCHER.createContext();
+  const history = pem.prepend();
+  history.consume(earlier);
+  history.finish();
+  pem.resolve(trimmed && startsInsidePemBlock(earlier + raw));
+  const masked = replaceRedactPattern(text, pem.pattern, (match) => match.replacement ?? "");
+  // Masking a dangling block swallows the final newline; keep lines separate for the next read.
+  return redactToolPayloadText(
+    text.endsWith("\n") && !masked.endsWith("\n") ? `${masked}\n` : masked,
+  );
 }
 
 /** Reads the active run's tail from `cursor`; inactive jobs report `active: false`. */
@@ -157,7 +138,7 @@ export function readCronCommandLiveOutput(
   if (!entry) {
     return { active: false, cursor: 0, text: "" };
   }
-  const start = entry.end - entry.retained;
+  const start = Math.max(0, entry.end - entry.ring.length);
   const { cursor } = request;
   const continuing =
     cursor !== undefined &&
@@ -175,7 +156,9 @@ export function readCronCommandLiveOutput(
   if (from === entry.end) {
     return { ...base, cursor: from, text: "" };
   }
-  let data = sliceFrom(entry, from);
+  const retained = sliceFrom(entry, start);
+  const before = from - start;
+  let data = retained.subarray(before);
   let skipped = 0;
   if (from === start && start > 0) {
     // Head trimming can leave the first retained byte inside a multi-byte character.
@@ -191,6 +174,10 @@ export function readCronCommandLiveOutput(
   return {
     ...base,
     cursor: from + skipped + cut,
-    text: presentLiveOutput(data.subarray(0, cut).toString("utf8")),
+    text: presentLiveOutput(
+      data.subarray(0, cut).toString("utf8"),
+      retained.subarray(0, before).toString("utf8"),
+      start > 0,
+    ),
   };
 }

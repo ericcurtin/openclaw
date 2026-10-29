@@ -108,6 +108,38 @@ describe("cron command live output buffer", () => {
     expect(text).not.toContain("\u0007");
   });
 
+  it("masks a private key across reads, including one whose opener was trimmed", () => {
+    const live = begin();
+    live.append(bytes("-----BEGIN PRIVATE KEY-----\nline1Z9Z9\n"));
+    const first = readCronCommandLiveOutput("job");
+    live.append(bytes("line2Z9Z9\n-----END PRIVATE KEY-----\nafter\n"));
+    const second = readCronCommandLiveOutput("job", { cursor: first.cursor, runAtMs: 1000 });
+    expect(first.text + second.text).not.toContain("Z9Z9");
+    expect(second.text).toContain("after");
+
+    const trimmed = begin(64);
+    trimmed.append(
+      bytes(
+        "-----BEGIN PRIVATE KEY-----\nline1Z9Z9\nline2Z9Z9\nline3Z9Z9\n-----END PRIVATE KEY-----\nok\n",
+      ),
+    );
+    const tail = readCronCommandLiveOutput("job");
+    expect(tail.truncated).toBe(true);
+    expect(tail.text).not.toContain("Z9Z9");
+    expect(tail.text).toContain("ok");
+  });
+
+  it("holds no more than the cap however many large chunks pass through", () => {
+    const live = begin();
+    const chunk = Buffer.alloc(64 * 1024, "x\n");
+    const before = process.memoryUsage().arrayBuffers;
+    for (let i = 0; i < 500; i += 1) {
+      live.append(chunk);
+    }
+    // Keeping dropped chunks alive would hold about 32 MiB here.
+    expect(process.memoryUsage().arrayBuffers - before).toBeLessThan(4 * 1024 * 1024);
+  });
+
   it("discards the buffer on end and ignores a stale owner", () => {
     const stale = begin();
     stale.append(bytes("old\n"));

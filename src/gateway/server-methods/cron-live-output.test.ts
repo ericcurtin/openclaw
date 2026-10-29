@@ -4,6 +4,7 @@ import { beginCronCommandLiveOutput } from "../../cron/command-live-output.js";
 import {
   createCronCallerClient,
   createCronJob,
+  createCronTestContext,
   createCronTestInvoker,
   expectResponseError,
 } from "./cron.validation.test-support.js";
@@ -86,6 +87,29 @@ describe("cron.liveOutput", () => {
       { currentJob: job, client: createCronCallerClient("other") },
     );
     expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes: "not found" });
+    expect(JSON.stringify(respond.mock.calls)).not.toContain("secret-ish");
+  });
+
+  it("releases nothing when authority closes while the job read is pending", async () => {
+    begin().append(Buffer.from("secret-ish\n"));
+    const context = createCronTestContext(job, getRuntimeConfig);
+    let current = true;
+    let release = () => {};
+    context.cron.readJob.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return job;
+    });
+    const respond = vi.fn();
+    const pending = invokeCron(
+      "cron.liveOutput",
+      { id: "live-job" },
+      { context, respond, hasCurrentClientAuthority: () => current },
+    );
+    current = false;
+    release();
+    await expect(pending).rejects.toThrow("authority closed");
     expect(JSON.stringify(respond.mock.calls)).not.toContain("secret-ish");
   });
 

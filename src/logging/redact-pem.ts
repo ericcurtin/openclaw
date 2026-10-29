@@ -167,6 +167,14 @@ function* matchPem(text: string, context: PemState, incomplete: boolean): Iterab
   }
 }
 
+/** True when the first PEM delimiter is an END, so the block's opener was cut off before `text`. */
+export function startsInsidePemBlock(text: string): boolean {
+  for (const delimiter of readDelimiters(text, createState().scanner)) {
+    return delimiter.kind === "end";
+  }
+  return false;
+}
+
 export const PEM_REDACT_MATCHER = {
   source: PEM_REDACT_PATTERN_SOURCE,
   exec(text: string): Iterable<RedactMatch> {

@@ -149,6 +149,22 @@ it("stops polling and explains the handoff once the Gateway reports no live run"
   expect(request.mock.calls.length).toBe(calls);
 });
 
+it("keeps polling while the command has not started and follows once it does", async () => {
+  const idle: CronLiveOutputResult = { active: false, cursor: 0, text: "" };
+  const request = vi
+    .fn()
+    .mockResolvedValueOnce(idle)
+    .mockResolvedValueOnce(idle)
+    .mockResolvedValue(live({ cursor: 2, text: "x\n", reset: true }));
+  const { gateway } = connectedGateway(request);
+  const view = await mountHistory(gateway);
+  await tick(0);
+  await tick();
+  expect(view.container.textContent).not.toContain("The run is finishing.");
+  await tick();
+  expect(stream(view.container)?.textContent).toBe("x\n");
+});
+
 it("offers jump-to-latest only after the reader scrolls up", async () => {
   const request = vi.fn(async () => live({ cursor: 2, text: "x\n", reset: true }));
   const { gateway } = connectedGateway(request);

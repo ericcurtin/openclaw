@@ -59,7 +59,11 @@ export function LiveOutput(props: { gateway: CronProps["gateway"]; jobId: string
       }
       setError(null);
       if (!result.active) {
-        setEnded(true);
+        // No buffer yet can mean the command has not started (a slow trigger); only a buffer that
+        // vanished after we saw it is the end. The parent unmounts us when the run stops.
+        if (cursor) {
+          setEnded(true);
+        }
         return;
       }
       cursor = { offset: result.cursor, runAtMs: result.runAtMs };
