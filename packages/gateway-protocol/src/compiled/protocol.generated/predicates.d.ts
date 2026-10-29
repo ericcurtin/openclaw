@@ -1978,11 +1978,6 @@ export function isSessionsTitlePrepareParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").SessionsTitlePrepareParamsSchema
 >;
-export function isSessionsRecoverParams(
-  value: unknown,
-): value is import("typebox").Static<
-  typeof import("../../schema-modules.js").SessionsRecoverParamsSchema
->;
 export function isSessionsSendParams(
   value: unknown,
 ): value is import("typebox").Static<
