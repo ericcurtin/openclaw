@@ -125,7 +125,12 @@ const acpMocks = vi.hoisted(() => ({
         entry: { acp?: Record<string, unknown> } | undefined,
       ) => Record<string, unknown> | null | undefined;
     }) => Promise<unknown>
-  >(async () => null),
+  >(async (params) => {
+    // Like the real writer, return the stored entry: strict ACP callers require it.
+    const entry = { sessionId: "session-1", updatedAt: 0 };
+    const acp = params.mutate(undefined, entry);
+    return acp ? { ...entry, acp } : null;
+  }),
   requireAcpRuntimeBackend: vi.fn<() => unknown>(),
 }));
 const { mocks: sessionBindingMocks, module: sessionBindingModule } = await vi.hoisted(async () => {
