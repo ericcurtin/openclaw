@@ -5,13 +5,11 @@ import { applyLiveOutput, type LiveOutputView } from "../../lib/cron/live-output
 import { formatUiError } from "../../lib/format-error.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { useStreamAutoFollow } from "../../lib/reactive/stream-auto-follow.ts";
+import { isNearStreamEnd, useStreamAutoFollow } from "../../lib/reactive/stream-auto-follow.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import type { CronProps } from "./view-types.ts";
 
 const LIVE_OUTPUT_POLL_MS = 2000;
-// Same threshold `useStreamAutoFollow` uses to decide the reader is still at the end.
-const FOLLOW_SLACK_PX = 120;
 
 /**
  * Tails the running command job's Gateway buffer. The parent mounts one instance per run
@@ -108,10 +106,7 @@ export function LiveOutput(props: { gateway: CronProps["gateway"]; jobId: string
           }}
           onScroll={(event) => {
             follow.handleScroll(event);
-            const target = event.currentTarget;
-            setPaused(
-              target.scrollHeight - target.scrollTop - target.clientHeight >= FOLLOW_SLACK_PX,
-            );
+            setPaused(!isNearStreamEnd(event.currentTarget));
           }}
         >
           {received() ? view().text : t("cron.liveOutput.waiting")}
