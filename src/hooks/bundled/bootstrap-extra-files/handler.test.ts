@@ -94,7 +94,7 @@ describe("bootstrap-extra-files hook", () => {
     await handler(createHookEvent("agent", "bootstrap", "agent:main:main", context));
     expect(log.warn).toHaveBeenCalledTimes(1);
     const [message, meta] = log.warn.mock.calls[0] ?? [];
-    expect(message).toBe("configured extra bootstrap files were not loaded");
+    expect(message).toContain("Use a supported bootstrap filename inside the workspace");
     expect(meta).toMatchObject({
       skipped: 1,
       files: [

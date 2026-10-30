@@ -5,6 +5,8 @@ import { loadDeclaredExtraBootstrapFiles } from "./declared-files.js";
 
 const log = createSubsystemLogger("bootstrap-extra-files");
 const MAX_WARNED_SKIPS = 256;
+const SKIPPED_FILES_WARNING =
+  "configured extra bootstrap files were not loaded. Use a supported bootstrap filename inside the workspace, or check file access: https://docs.openclaw.ai/automation/hooks/bundled-hooks#bootstrap-extra-files";
 const warnedSkips = new Set<string>();
 
 const bootstrapExtraFilesHook: HookHandler = async (event) => {
@@ -31,7 +33,7 @@ const bootstrapExtraFilesHook: HookHandler = async (event) => {
     const dropped = diagnostics.filter((item) => item.reason !== "missing");
     const warnKey = dropped.map((item) => `${item.reason}:${item.path}`).join("\n");
     if (dropped.length > 0 && rememberBoundedKey(warnedSkips, warnKey, MAX_WARNED_SKIPS)) {
-      log.warn("configured extra bootstrap files were not loaded", {
+      log.warn(SKIPPED_FILES_WARNING, {
         skipped: dropped.length,
         files: dropped.slice(0, 5),
       });
