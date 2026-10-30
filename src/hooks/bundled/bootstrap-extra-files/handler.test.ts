@@ -9,7 +9,10 @@ import {
 import handler from "./handler.js";
 
 const log = vi.hoisted(() => ({ warn: vi.fn(), debug: vi.fn() }));
-vi.mock("../../../logging/subsystem.js", () => ({ createSubsystemLogger: () => log }));
+vi.mock("../../../logging/subsystem.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../logging/subsystem.js")>()),
+  createSubsystemLogger: () => log,
+}));
 
 async function bootstrap({
   extraName,
