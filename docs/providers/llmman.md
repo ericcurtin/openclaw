@@ -1031,6 +1031,17 @@ container, or service account.
     Large models can take minutes to load, especially on the first request after an idle unload. Raise `models.providers.llmman.timeoutSeconds`, warm the model with a first `openclaw infer model run`, and consider a longer `LLMMAN_KEEP_ALIVE` on the daemon.
   </Accordion>
 
+  <Accordion title="A reply waits behind another request">
+    A model serves one request per slot, so a second request waits for the first. To tell waiting from generating, start the daemon with `LLMMAN_METRICS=1` and `LLMMAN_NUM_PARALLEL=1` (llmman 0.1.670 or newer) and read the per-model gauges:
+
+    ```bash
+    curl -s http://127.0.0.1:17434/metrics | grep -E '^llmman_requests_(in_flight|queued)'
+    ```
+
+    `llmman_requests_queued` above `0` means requests are waiting for a free slot. It is an estimate and is absent unless `LLMMAN_NUM_PARALLEL` is set. llmman frees a slot as soon as the client disconnects, so cancelling a turn in OpenClaw does not hold up the next request.
+
+  </Accordion>
+
   <Accordion title="Hybrid request fails with no API key for provider">
     llmman routed the request to the hosted half and found no usable key. Either the bearer OpenClaw sent was a marker (`llmman-local`) rather than a real key, or you used the `llmman` placeholder without giving the daemon its own `OPENAI_API_KEY`, or the daemon is bound off loopback and refuses to spend its own key. See [Hosted-provider key](#hosted-provider-key).
   </Accordion>
